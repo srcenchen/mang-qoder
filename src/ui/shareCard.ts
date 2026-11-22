@@ -2,6 +2,8 @@ export interface PlaythroughStats {
   elapsedSeconds: number;
   caneTaps: number;
   obstacleBumps: number;
+  memoriesFound: number;
+  memoriesTotal: number;
 }
 
 /**
@@ -16,25 +18,24 @@ export function generateEmpathySharePoster(stats: PlaythroughStats): string {
   canvas.height = H;
   const ctx = canvas.getContext('2d')!;
 
-  // 1. Deep Obsidian & Warm Sunset Gold Radial Background
+  // 1. Deep Obsidian & After-Rain Sunset Gold Radial Background
   const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
-  bgGrad.addColorStop(0, '#05080f');
-  bgGrad.addColorStop(0.52, '#0a101d');
-  bgGrad.addColorStop(0.88, '#1a1410');
-  bgGrad.addColorStop(1, '#291a0d');
+  bgGrad.addColorStop(0, '#07090e');
+  bgGrad.addColorStop(0.5, '#0c121f');
+  bgGrad.addColorStop(0.86, '#1f150e');
+  bgGrad.addColorStop(1, '#301b0c');
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, W, H);
 
-  // Subtle Warm Sunset Horizon Halo at Bottom
-  const glowGrad = ctx.createRadialGradient(W / 2, H * 0.78, 30, W / 2, H * 0.78, 620);
-  glowGrad.addColorStop(0, 'rgba(245, 158, 11, 0.24)');
-  glowGrad.addColorStop(0.45, 'rgba(56, 189, 248, 0.08)');
-  glowGrad.addColorStop(1, 'rgba(5, 8, 15, 0)');
+  const glowGrad = ctx.createRadialGradient(W / 2, H * 0.78, 30, W / 2, H * 0.78, 640);
+  glowGrad.addColorStop(0, 'rgba(255, 179, 71, 0.28)');
+  glowGrad.addColorStop(0.45, 'rgba(56, 189, 248, 0.09)');
+  glowGrad.addColorStop(1, 'rgba(7, 9, 14, 0)');
   ctx.fillStyle = glowGrad;
   ctx.fillRect(0, 0, W, H);
 
-  // 2. Decorative Sonic Echo Concentric Ripples (Cyan & Gold)
-  const ringCenterY = 620;
+  // 2. Decorative Sonic Echo Concentric Ripples
+  const ringCenterY = 610;
   const radii = [140, 235, 340, 455];
   radii.forEach((r, idx) => {
     ctx.save();
@@ -42,49 +43,47 @@ export function generateEmpathySharePoster(stats: PlaythroughStats): string {
     ctx.ellipse(W / 2, ringCenterY, r * 1.05, r * 0.42, 0, 0, Math.PI * 2);
     ctx.strokeStyle =
       idx % 2 === 0
-        ? `rgba(245, 158, 11, ${0.42 - idx * 0.07})`
-        : `rgba(56, 189, 248, ${0.38 - idx * 0.06})`;
-    ctx.lineWidth = idx === 0 ? 4 : 2.5;
+        ? `rgba(255, 179, 71, ${0.46 - idx * 0.07})`
+        : `rgba(56, 189, 248, ${0.42 - idx * 0.06})`;
+    ctx.lineWidth = idx === 0 ? 4.5 : 2.5;
     ctx.stroke();
     ctx.restore();
   });
 
-  // Floating Golden & Cyan Sparkle Motes
-  for (let i = 0; i < 65; i++) {
+  for (let i = 0; i < 75; i++) {
     const sx = ((i * 173) % 960) + 60;
     const sy = ((i * 293) % 1680) + 120;
-    const sr = 1.5 + (i % 3) * 1.2;
-    ctx.fillStyle =
-      i % 3 === 0 ? 'rgba(251, 191, 36, 0.55)' : 'rgba(56, 189, 248, 0.42)';
+    const sr = 1.6 + (i % 3) * 1.2;
+    ctx.fillStyle = i % 3 === 0 ? 'rgba(255, 179, 71, 0.58)' : 'rgba(56, 189, 248, 0.45)';
     ctx.beginPath();
     ctx.arc(sx, sy, sr, 0, Math.PI * 2);
     ctx.fill();
   }
 
   // 3. Outer Editorial Gold Frame Border
-  ctx.strokeStyle = 'rgba(245, 158, 11, 0.35)';
+  ctx.strokeStyle = 'rgba(255, 179, 71, 0.42)';
   ctx.lineWidth = 2;
   ctx.strokeRect(52, 52, W - 104, H - 104);
 
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+  ctx.strokeStyle = 'rgba(232, 228, 218, 0.1)';
   ctx.lineWidth = 1;
   ctx.strokeRect(68, 68, W - 136, H - 136);
 
-  // 4. Top Braille + Title Typography
+  // 4. Braille + Title Typography
   ctx.textAlign = 'center';
-  ctx.fillStyle = '#fbbf24';
+  ctx.fillStyle = '#ffb347';
   ctx.font = '30px monospace';
-  ctx.fillText('⠞⠊⠝⠛  ⠚⠊⠁⠝  ·  ⠍⠁⠝⠛  ⠙⠁⠕  ⠭⠊⠝⠛', W / 2, 175);
+  ctx.fillText('⠞⠊⠝⠛  ⠚⠊⠁⠝  ·  ⠍⠁⠝⠛  ⠙⠁⠕  ⠭⠊⠝⠛', W / 2, 172);
 
-  ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 86px "PingFang SC", "Microsoft YaHei", sans-serif';
-  ctx.fillText('听见 · 盲道行', W / 2, 288);
+  ctx.fillStyle = '#e8e4da';
+  ctx.font = 'bold 88px "PingFang SC", "Microsoft YaHei", sans-serif';
+  ctx.fillText('听见 · 盲道行', W / 2, 286);
 
-  ctx.fillStyle = 'rgba(186, 230, 253, 0.85)';
+  ctx.fillStyle = 'rgba(186, 230, 253, 0.88)';
   ctx.font = '30px "PingFang SC", "Microsoft YaHei", sans-serif';
-  ctx.fillText('城市无障碍第一人称声波共情体验记录', W / 2, 352);
+  ctx.fillText('城市无障碍第一人称声波共情体验记录', W / 2, 350);
 
-  // Stylized Minimalist Red-White Cane Illustration over Sonic Ripple Center
+  // Minimalist Red-White Guide Cane Illustration
   ctx.save();
   ctx.strokeStyle = '#f8fafc';
   ctx.lineWidth = 9;
@@ -106,94 +105,106 @@ export function generateEmpathySharePoster(stats: PlaythroughStats): string {
   ctx.fill();
   ctx.restore();
 
-  // 5. Three Sculpted Data Cards
-  const cardTop = 825;
-  const cardW = 276;
-  const cardH = 250;
-  const gap = 30;
-  const startX = (W - (cardW * 3 + gap * 2)) / 2;
+  // 5. Four Sculpted Data Cards (2x2 Grid for crisp typography!)
+  const gridTop = 790;
+  const cardW = 432;
+  const cardH = 165;
+  const gapX = 32;
+  const gapY = 26;
+  const startX = (W - (cardW * 2 + gapX)) / 2;
 
   const metricItems = [
     {
       value: `${stats.elapsedSeconds}s`,
-      label: '黑暗同行耗时',
-      sub: '45 米城市街角',
-      accent: '#fbbf24',
+      label: '雨夜盲行总耗时',
+      sub: '45 米真实城市街角',
+      accent: '#ffb347',
     },
     {
       value: `${stats.caneTaps}`,
       label: '盲杖探路敲击',
-      sub: '以回响辨认前路',
+      sub: '以回响丈量每一寸前路',
       accent: '#38bdf8',
     },
     {
       value: `${stats.obstacleBumps}`,
-      label: '遭遇占道受阻',
-      sub: stats.obstacleBumps === 0 ? '谨慎避让全程' : '违停单车与围挡',
+      label: '遭遇占道碰壁',
+      sub: stats.obstacleBumps === 0 ? '谨慎探路零碰壁' : '违停单车与施工围挡',
       accent: '#fda4af',
+    },
+    {
+      value: `${stats.memoriesFound}/${stats.memoriesTotal}`,
+      label: '听见的城市微光',
+      sub: '无障碍细节触感记录',
+      accent: '#6ee7b7',
     },
   ];
 
   metricItems.forEach((item, i) => {
-    const cx = startX + i * (cardW + gap);
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.78)';
-    ctx.strokeStyle = 'rgba(245, 158, 11, 0.32)';
+    const col = i % 2;
+    const row = Math.floor(i / 2);
+    const cx = startX + col * (cardW + gapX);
+    const cy = gridTop + row * (cardH + gapY);
+
+    ctx.fillStyle = 'rgba(15, 21, 32, 0.82)';
+    ctx.strokeStyle = 'rgba(255, 179, 71, 0.34)';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.roundRect(cx, cardTop, cardW, cardH, 28);
+    ctx.roundRect(cx, cy, cardW, cardH, 20);
     ctx.fill();
     ctx.stroke();
 
+    ctx.textAlign = 'left';
     ctx.fillStyle = item.accent;
-    ctx.font = 'bold 72px ui-monospace, SFMono-Regular, Menlo, monospace';
-    ctx.fillText(item.value, cx + cardW / 2, cardTop + 108);
+    ctx.font = 'bold 62px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.fillText(item.value, cx + 30, cy + 78);
 
-    ctx.fillStyle = '#f1f5f9';
-    ctx.font = 'bold 30px "PingFang SC", "Microsoft YaHei", sans-serif';
-    ctx.fillText(item.label, cx + cardW / 2, cardTop + 168);
+    ctx.fillStyle = '#e8e4da';
+    ctx.font = 'bold 28px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillText(item.label, cx + 30, cy + 124);
 
     ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
-    ctx.font = '22px "PingFang SC", "Microsoft YaHei", sans-serif';
-    ctx.fillText(item.sub, cx + cardW / 2, cardTop + 212);
+    ctx.font = '20px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillText(item.sub, cx + 30, cy + 152);
   });
 
   // 6. Empathy Quote Block
-  ctx.fillStyle = 'rgba(251, 191, 36, 0.9)';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255, 179, 71, 0.9)';
   ctx.font = '46px serif';
-  ctx.fillText('“', W / 2, 1195);
+  ctx.fillText('“', W / 2, 1240);
 
   const quoteLines = [
-    '在全黑的三分钟里，每一次盲杖落地的脆响，',
+    '在全黑的雨夜里，每一次盲杖落地的脆响，',
     '都是中国 1731 万视障者走出家门的勇气。',
     '挪开一辆占道的单车，或是在路口轻声回应一句：',
     '“别急，变绿灯了”——你就是城市里的那束暖光。',
   ];
-  ctx.fillStyle = '#e2e8f0';
+  ctx.fillStyle = '#e8e4da';
   ctx.font = '32px "PingFang SC", "Microsoft YaHei", sans-serif';
   quoteLines.forEach((line, idx) => {
-    ctx.fillText(line, W / 2, 1265 + idx * 58);
+    ctx.fillText(line, W / 2, 1306 + idx * 56);
   });
 
-  // Divider line
-  ctx.strokeStyle = 'rgba(245, 158, 11, 0.4)';
+  ctx.strokeStyle = 'rgba(255, 179, 71, 0.45)';
   ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.moveTo(W / 2 - 220, 1560);
-  ctx.lineTo(W / 2 + 220, 1560);
+  ctx.moveTo(W / 2 - 220, 1575);
+  ctx.lineTo(W / 2 + 220, 1575);
   ctx.stroke();
 
-  // 7. Public Welfare Call-to-Action & Braille Footer
-  ctx.fillStyle = '#fbbf24';
+  // 7. Public Welfare Footer
+  ctx.fillStyle = '#ffb347';
   ctx.font = 'bold 38px "PingFang SC", "Microsoft YaHei", sans-serif';
-  ctx.fillText('请把盲道还给盲杖 · 让善意被听见', W / 2, 1635);
+  ctx.fillText('请把盲道还给盲杖 · 让善意被听见', W / 2, 1648);
 
-  ctx.fillStyle = 'rgba(251, 191, 36, 0.65)';
+  ctx.fillStyle = 'rgba(255, 179, 71, 0.68)';
   ctx.font = '26px monospace';
-  ctx.fillText('⠇⠑⠞  ⠅⠊⠝⠙⠝⠑⠎⠎  ⠃⠑  ⠓⠑⠁⠗⠙', W / 2, 1695);
+  ctx.fillText('⠇⠑⠞  ⠅⠊⠝⠙⠝⠑⠎⠎  ⠃⠑  ⠓⠑⠁⠗⠙', W / 2, 1705);
 
   ctx.fillStyle = 'rgba(148, 163, 184, 0.78)';
   ctx.font = '24px "PingFang SC", "Microsoft YaHei", sans-serif';
-  ctx.fillText('2026 Qoder 高校创造力大赛 · 城市无障碍公益互动作品', W / 2, 1795);
+  ctx.fillText('2026 Qoder 高校创造力大赛 · 城市无障碍公益互动作品', W / 2, 1802);
 
   return canvas.toDataURL('image/png');
 }

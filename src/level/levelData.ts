@@ -7,6 +7,7 @@ export type SurfaceTag =
   | 'cat'
   | 'door'
   | 'cane_pickup'
+  | 'signal_pole'
   | 'interior_tile'
   | 'crosswalk'
   | 'wall'
@@ -18,13 +19,32 @@ export interface ColliderBox {
   maxX: number;
   minZ: number;
   maxZ: number;
-  /** Height for debug wireframe visualization */
   height: number;
   tag: SurfaceTag;
-  /** True if bumping into this triggers obstacle setback audio/haptics/counter */
   isObstacle?: boolean;
-  /** Allows dynamic toggling (e.g. foyer door & crosswalk safety air-wall) */
   enabled: boolean;
+}
+
+export interface AcousticBeacon {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  z: number;
+  color: 'amber' | 'cyan' | 'alarm';
+  radius: number;
+  active: boolean;
+}
+
+export interface MicroInteraction {
+  id: 'bike_report' | 'pet_cat' | 'signal_pole';
+  promptText: string;
+  brailleHint: string;
+  x: number;
+  z: number;
+  radius: number;
+  completed: boolean;
+  unlocked: boolean;
 }
 
 export interface LevelWaypoints {
@@ -36,6 +56,7 @@ export interface LevelWaypoints {
   barrierCenter: { x: number; z: number };
   stallLightPos: { x: number; y: number; z: number };
   catPos: { x: number; y: number; z: number };
+  signalPolePos: { x: number; y: number; z: number };
   crosswalkPromptZ: number;
   pedestrianPos: { x: number; y: number; z: number };
   sunsetFinishZ: number;
@@ -51,12 +72,123 @@ export const WAYPOINTS: LevelWaypoints = {
   firstTactileZ: -6.4,
   bikesCenter: { x: 0.05, z: -13.5 },
   barrierCenter: { x: 0.0, z: -21.5 },
-  stallLightPos: { x: -2.55, y: 2.25, z: -24.6 },
+  stallLightPos: { x: -2.45, y: 2.25, z: -24.6 },
   catPos: { x: -0.92, y: 0.08, z: -24.6 },
+  signalPolePos: { x: 1.55, y: 0.08, z: -31.75 },
   crosswalkPromptZ: -31.5,
   pedestrianPos: { x: 0.0, y: 0.08, z: -43.2 },
   sunsetFinishZ: -43.0,
 };
+
+export function createInitialBeacons(): AcousticBeacon[] {
+  return [
+    {
+      id: 'cane_beacon',
+      label: '导盲杖',
+      x: WAYPOINTS.canePickupPos.x,
+      y: 0.5,
+      z: WAYPOINTS.canePickupPos.z,
+      color: 'cyan',
+      radius: 8,
+      active: true,
+    },
+    {
+      id: 'door_breeze',
+      label: '室外雨声',
+      x: 0,
+      y: 1.2,
+      z: -5.8,
+      color: 'cyan',
+      radius: 9,
+      active: false,
+    },
+    {
+      id: 'barrier_beacon',
+      label: '施工警示灯',
+      x: 0,
+      y: 1.15,
+      z: -21.5,
+      color: 'alarm',
+      radius: 11,
+      active: true,
+    },
+    {
+      id: 'stall_sizzle',
+      label: '早点摊蒸气',
+      x: WAYPOINTS.stallLightPos.x,
+      y: 1.3,
+      z: WAYPOINTS.stallLightPos.z,
+      color: 'amber',
+      radius: 13,
+      active: true,
+    },
+    {
+      id: 'cat_purr',
+      label: '街角小猫',
+      x: WAYPOINTS.catPos.x,
+      y: 0.3,
+      z: WAYPOINTS.catPos.z,
+      color: 'amber',
+      radius: 7,
+      active: true,
+    },
+    {
+      id: 'crosswalk_traffic',
+      label: '路口车流',
+      x: 0,
+      y: 0.8,
+      z: -36.5,
+      color: 'alarm',
+      radius: 14,
+      active: true,
+    },
+    {
+      id: 'stranger_voice',
+      label: '热心路人',
+      x: WAYPOINTS.pedestrianPos.x,
+      y: 1.5,
+      z: WAYPOINTS.pedestrianPos.z,
+      color: 'amber',
+      radius: 20,
+      active: false,
+    },
+  ];
+}
+
+export function createInitialMicroInteractions(): MicroInteraction[] {
+  return [
+    {
+      id: 'bike_report',
+      promptText: '标记违停占道点 [E]',
+      brailleHint: '⠍⠁⠗⠅ ⠃⠊⠅⠑',
+      x: 0.05,
+      z: -13.5,
+      radius: 2.35,
+      completed: false,
+      unlocked: true,
+    },
+    {
+      id: 'pet_cat',
+      promptText: '蹲下轻抚街角小猫 [E]',
+      brailleHint: '⠏⠑⠞ ⠉⠁⠞',
+      x: WAYPOINTS.catPos.x,
+      z: WAYPOINTS.catPos.z,
+      radius: 2.2,
+      completed: false,
+      unlocked: true,
+    },
+    {
+      id: 'signal_pole',
+      promptText: '触摸路口信号灯柱 [E]',
+      brailleHint: '⠉⠓⠑⠉⠅ ⠏⠕⠇⠑',
+      x: WAYPOINTS.signalPolePos.x,
+      z: WAYPOINTS.signalPolePos.z,
+      radius: 1.95,
+      completed: false,
+      unlocked: true,
+    },
+  ];
+}
 
 export function createInitialColliders(): ColliderBox[] {
   return [
@@ -129,24 +261,24 @@ export function createInitialColliders(): ColliderBox[] {
       maxZ: -5.4,
       height: 2.2,
       tag: 'door',
-      enabled: true, // Opens automatically when approaching with cane
+      enabled: true,
     },
 
-    // === Street Outer Corridor Bounds (X = -4.3 to +4.3, Z = -5.5 to -45.5) ===
+    // === Street Outer Corridor Bounds ===
     {
       id: 'street_left_wall',
       minX: -4.65,
-      maxX: -4.25,
+      maxX: -4.22,
       minZ: -45.5,
       maxZ: -5.5,
-      height: 3.5,
+      height: 4.5,
       tag: 'wall',
       enabled: true,
     },
     {
       id: 'street_right_boundary',
-      minX: 4.25,
-      maxX: 4.65,
+      minX: 3.35,
+      maxX: 3.75,
       minZ: -45.5,
       maxZ: -5.5,
       height: 1.2,
@@ -189,46 +321,56 @@ export function createInitialColliders(): ColliderBox[] {
     },
     {
       id: 'street_lamp_1',
-      minX: 1.22,
-      maxX: 1.48,
+      minX: 1.48,
+      maxX: 1.76,
       minZ: -16.95,
       maxZ: -16.65,
-      height: 3.6,
+      height: 4.2,
       tag: 'normal',
       enabled: true,
     },
     {
       id: 'street_lamp_2',
-      minX: 1.22,
-      maxX: 1.48,
+      minX: 1.48,
+      maxX: 1.76,
       minZ: -28.35,
       maxZ: -28.05,
-      height: 3.6,
+      height: 4.2,
       tag: 'normal',
       enabled: true,
     },
     {
+      id: 'crosswalk_signal_pole',
+      minX: 1.4,
+      maxX: 1.7,
+      minZ: -31.9,
+      maxZ: -31.6,
+      height: 3.4,
+      tag: 'signal_pole',
+      enabled: true,
+    },
+    {
       id: 'tree_pit_1',
-      minX: 2.55,
-      maxX: 3.15,
+      minX: 2.45,
+      maxX: 3.05,
       minZ: -10.5,
       maxZ: -9.9,
-      height: 2.6,
+      height: 3.2,
       tag: 'normal',
       enabled: true,
     },
     {
       id: 'tree_pit_2',
-      minX: 2.55,
-      maxX: 3.15,
+      minX: 2.45,
+      maxX: 3.05,
       minZ: -18.9,
       maxZ: -18.3,
-      height: 2.6,
+      height: 3.2,
       tag: 'normal',
       enabled: true,
     },
 
-    // === Scene 3: Warm Breakfast Stall & Cat (Z = -24.6, Left Sidewalk) ===
+    // === Scene 3: Warm Breakfast Stall & Cat ===
     {
       id: 'breakfast_stall_counter',
       minX: -4.25,
@@ -270,7 +412,7 @@ export function createInitialColliders(): ColliderBox[] {
       enabled: true,
     },
 
-    // === Scene 4: Crosswalk Safety Air-Wall (Released on 3rd Help Call) ===
+    // === Scene 4: Crosswalk Safety Air-Wall (Thick 1.2m so player stops cleanly on dot bricks!) ===
     {
       id: 'crosswalk_airwall',
       minX: -4.6,

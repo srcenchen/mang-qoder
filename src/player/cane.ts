@@ -6,12 +6,15 @@ export interface CaneHitEvent {
   tag: SurfaceTag;
   pan: number;
   isManualTap: boolean;
+  isHeavyEcho: boolean;
+  side: -1 | 1; // -1 = Left tap, +1 = Right tap
 }
 
 export class GuideCaneSystem {
   public readonly handRoot = new THREE.Group();
   public equipped = false;
   public totalTaps = 0;
+  public chargeProgress = 0;
 
   private canePivot = new THREE.Group();
   private tipMarker = new THREE.Object3D();
@@ -20,17 +23,28 @@ export class GuideCaneSystem {
   private onHit: (event: CaneHitEvent) => void;
 
   private raycaster = new THREE.Raycaster();
-  private currentSweep = 0;
+
+  /** Rhythmic Two-Point Touch: single/timed-out tap hits aimed center (0); continuous taps alternate subtly Left (-1) / Right (+1) */
+  private nextComboSide: -1 | 1 = -1;
+  private lastTapTimeSec = -10;
+  private readonly comboTimeoutSec = 0.85;
+  private currentSidePos = 0; // 0 = aimed center, subtle ±0.34 during continuous alternating taps
+  private targetSidePos = 0;
+
   private tapAnimTimer = 0;
-  private readonly tapAnimDuration = 0.28;
+  private readonly tapAnimDuration = 0.3;
+
+  private isCharging = false;
+  private chargeHoldSec = 0;
+  private readonly heavyThresholdSec = 0.36;
 
   private tipWorldPos = new THREE.Vector3();
   private handWorldPos = new THREE.Vector3();
   private rayDir = new THREE.Vector3();
-
-  private lastSweptTag: SurfaceTag | null = null;
-  private lastAutoSweepTime = -10;
   private elapsed = 0;
+
+  private whiteShaftMat!: THREE.MeshStandardMaterial;
+  private redReflectiveMat!: THREE.MeshStandardMaterial;
 
   constructor(
     camera: THREE.PerspectiveCamera,
@@ -47,83 +61,91 @@ export class GuideCaneSystem {
   }
 
   private buildFirstPersonCaneModel(): void {
-    // Positioned in bottom-right of camera view (matching Reference Images 2, 3, 4!)
-    this.handRoot.position.set(0.38, -0.32, -0.42);
+    // Framed bottom-right pointing naturally forward-downward toward ground ahead
+    this.handRoot.position.set(0.32, -0.34, -0.42);
 
-    // Coat sleeve & right hand gripping handle
     const sleeveMat = new THREE.MeshStandardMaterial({
-      color: '#1b2230',
-      roughness: 0.85,
+      color: '#19202d',
+      roughness: 0.82,
+      metalness: 0.06,
     });
     const skinMat = new THREE.MeshStandardMaterial({
       color: '#c69474',
-      roughness: 0.68,
+      roughness: 0.65,
     });
     const gripMat = new THREE.MeshStandardMaterial({
-      color: '#11151c',
-      roughness: 0.78,
+      color: '#0e1218',
+      roughness: 0.72,
+      metalness: 0.12,
     });
-    const whiteShaftMat = new THREE.MeshStandardMaterial({
+    const collarMat = new THREE.MeshStandardMaterial({
+      color: '#94a3b8',
+      roughness: 0.28,
+      metalness: 0.85,
+    });
+    this.whiteShaftMat = new THREE.MeshStandardMaterial({
       color: '#f1f5f9',
       emissive: '#334155',
-      emissiveIntensity: 0.25,
-      roughness: 0.25,
-      metalness: 0.15,
+      emissiveIntensity: 0.16,
+      roughness: 0.2,
+      metalness: 0.28,
     });
-    const redReflectiveMat = new THREE.MeshStandardMaterial({
-      color: '#dc2626',
+    this.redReflectiveMat = new THREE.MeshStandardMaterial({
+      color: '#e11d48',
       emissive: '#7f1d1d',
-      emissiveIntensity: 0.3,
-      roughness: 0.28,
-      metalness: 0.2,
+      emissiveIntensity: 0.24,
+      roughness: 0.22,
+      metalness: 0.3,
     });
 
-    // Subtle dedicated key light on camera for held hand/cane silhouette readability
-    const handLight = new THREE.PointLight('#bae6fd', 0.35, 1.8);
-    handLight.position.set(-0.1, 0.25, 0.2);
+    const handLight = new THREE.PointLight('#bae6fd', 0.22, 1.5);
+    handLight.position.set(-0.1, 0.24, 0.2);
     this.handRoot.add(handLight);
 
-    // Forearm sleeve
-    const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.064, 0.32, 12), sleeveMat);
+    const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.064, 0.34, 14), sleeveMat);
     sleeve.rotation.x = Math.PI / 2 - 0.18;
-    sleeve.rotation.z = 0.34;
-    sleeve.position.set(0.12, -0.04, 0.15);
+    sleeve.rotation.z = 0.24;
+    sleeve.position.set(0.1, -0.04, 0.15);
     this.canePivot.add(sleeve);
 
-    // Hand palm & fingers around grip
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.044, 12, 10), skinMat);
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.044, 14, 12), skinMat);
     hand.scale.set(0.95, 0.78, 1.25);
     hand.position.set(0.015, -0.008, 0.015);
     this.canePivot.add(hand);
 
-    // Cane shaft: -Math.PI/2 points straight ahead (-Z), so -1.78 rad pitches ~12 deg DOWN toward floor!
+    // Cane shaft pitched forward-downward toward ground ahead
     const shaftGroup = new THREE.Group();
     shaftGroup.rotation.x = -1.78;
-    shaftGroup.rotation.z = 0.26;
+    shaftGroup.rotation.z = 0.18;
 
-    const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.015, 0.24, 12), gripMat);
+    const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.015, 0.25, 14), gripMat);
     grip.position.y = 0.05;
     shaftGroup.add(grip);
 
+    for (const cy of [0.18, 0.62, 1.08]) {
+      const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.025, 12), collarMat);
+      collar.position.y = cy;
+      shaftGroup.add(collar);
+    }
+
     const upperWhite = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.012, 0.011, 0.92, 12),
-      whiteShaftMat
+      new THREE.CylinderGeometry(0.0115, 0.011, 0.92, 14),
+      this.whiteShaftMat
     );
     upperWhite.position.y = 0.63;
     shaftGroup.add(upperWhite);
 
     const lowerRed = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.011, 0.01, 0.42, 12),
-      redReflectiveMat
+      new THREE.CylinderGeometry(0.011, 0.01, 0.42, 14),
+      this.redReflectiveMat
     );
     lowerRed.position.y = 1.3;
     shaftGroup.add(lowerRed);
 
-    const rollerTip = new THREE.Mesh(new THREE.SphereGeometry(0.024, 14, 14), whiteShaftMat);
+    const rollerTip = new THREE.Mesh(new THREE.SphereGeometry(0.024, 16, 16), this.whiteShaftMat);
     rollerTip.position.y = 1.52;
     shaftGroup.add(rollerTip);
 
-    // Exact tip world tracker
     this.tipMarker.position.set(0, 1.54, 0);
     shaftGroup.add(this.tipMarker);
 
@@ -140,31 +162,83 @@ export class GuideCaneSystem {
     this.equipped = false;
     this.handRoot.visible = false;
     this.totalTaps = 0;
-    this.currentSweep = 0;
+    this.nextComboSide = -1;
+    this.lastTapTimeSec = -10;
+    this.currentSidePos = 0;
+    this.targetSidePos = 0;
     this.tapAnimTimer = 0;
-    this.lastSweptTag = null;
+    this.isCharging = false;
+    this.chargeHoldSec = 0;
+    this.chargeProgress = 0;
+  }
+
+  /** Begin holding Space / LMB / Cane Button to prepare & charge a tap */
+  public beginCharge(): void {
+    if (!this.equipped || this.isCharging) return;
+    this.isCharging = true;
+    this.chargeHoldSec = 0;
+    this.chargeProgress = 0;
+    const isContinuous = this.elapsed - this.lastTapTimeSec <= this.comboTimeoutSec;
+    this.targetSidePos = isContinuous ? this.nextComboSide * 0.34 : 0;
+  }
+
+  /** Release Space / LMB / Cane Button -> fires aimed center tap (after timeout) or subtle alternating Left/Right tap (continuous)! */
+  public releaseCharge(): void {
+    if (!this.equipped || !this.isCharging) return;
+    const heavy = this.chargeHoldSec >= this.heavyThresholdSec;
+    this.isCharging = false;
+    this.chargeHoldSec = 0;
+    this.chargeProgress = 0;
+    this.triggerTap(heavy);
   }
 
   /**
-   * Actively taps the cane on the ground/obstacle ahead (Space / Cane Button / Quick Tap).
+   * Manual-only tap:
+   * - If timed out (> 0.85s since last tap): taps cleanly at aimed center position (0), just like original precision.
+   * - If tapping continuously (<= 0.85s): subtly alternates Left (-0.34) -> Right (+0.34) -> Left (-0.34) without wide swing.
    */
-  public triggerTap(): void {
+  public triggerTap(isHeavyEcho = false): void {
     if (!this.equipped) return;
+
+    const isContinuous = this.elapsed - this.lastTapTimeSec <= this.comboTimeoutSec;
+    this.lastTapTimeSec = this.elapsed;
+
+    let strikeNorm = 0;
+    let side: -1 | 1 = 1;
+    if (isContinuous) {
+      side = this.nextComboSide;
+      this.nextComboSide = side === -1 ? 1 : -1;
+      strikeNorm = side * 0.34; // Subtle shoulder-width alternating offset!
+    } else {
+      // Timed out -> tap directly at aimed center, prime next rapid tap for Left
+      strikeNorm = 0;
+      this.nextComboSide = -1;
+    }
+
+    this.targetSidePos = strikeNorm;
+    this.currentSidePos = strikeNorm;
     this.tapAnimTimer = this.tapAnimDuration;
     this.totalTaps += 1;
+
+    this.canePivot.rotation.y = this.computePivotYaw(this.currentSidePos);
+    this.canePivot.rotation.x = -0.18;
+    this.canePivot.rotation.z = -strikeNorm * 0.08;
+    this.camera.updateMatrixWorld(true);
 
     const hit = this.performRaycast();
     this.onHit({
       point: hit.point,
       tag: hit.tag,
-      pan: Math.max(-0.85, Math.min(0.85, this.currentSweep * 0.9)),
+      pan: strikeNorm * 0.75, // Center (0) on single tap, subtle Left/Right stereo (-0.25/+0.25) on continuous taps
       isManualTap: true,
+      isHeavyEcho,
+      side,
     });
   }
 
-  public getTipWorldPosition(out: THREE.Vector3): THREE.Vector3 {
-    this.tipMarker.getWorldPosition(out);
-    return out;
+  /** Maps normalized side (0 = aimed center, subtle ±0.34 during continuous taps) to wrist yaw */
+  private computePivotYaw(sideNorm: number): number {
+    return 0.13 - sideNorm * 0.36;
   }
 
   private resolveTag(obj: THREE.Object3D | null): SurfaceTag {
@@ -183,11 +257,10 @@ export class GuideCaneSystem {
     this.canePivot.getWorldPosition(this.handWorldPos);
     this.tipMarker.getWorldPosition(this.tipWorldPos);
 
-    // Cast from hand along cane direction + slightly downward so ground/obstacles register reliably
     this.rayDir.subVectors(this.tipWorldPos, this.handWorldPos).normalize();
     this.raycaster.set(this.handWorldPos, this.rayDir);
     this.raycaster.near = 0.1;
-    this.raycaster.far = 2.85;
+    this.raycaster.far = 3.1;
 
     const hits = this.raycaster.intersectObjects(this.raycastTargets, true);
     if (hits.length > 0) {
@@ -197,7 +270,6 @@ export class GuideCaneSystem {
       };
     }
 
-    // Fallback: downward probe directly below cane tip XZ
     const probeOrigin = new THREE.Vector3(this.tipWorldPos.x, 1.4, this.tipWorldPos.z);
     this.raycaster.set(probeOrigin, new THREE.Vector3(0, -1, 0));
     this.raycaster.far = 2.2;
@@ -210,7 +282,7 @@ export class GuideCaneSystem {
     }
 
     return {
-      point: new THREE.Vector3(this.tipWorldPos.x, 0.05, this.tipWorldPos.z),
+      point: new THREE.Vector3(this.tipWorldPos.x, 0.08, this.tipWorldPos.z),
       tag: 'normal',
     };
   }
@@ -219,58 +291,62 @@ export class GuideCaneSystem {
     dt: number,
     targetSweepInput: number,
     isWalking: boolean,
-    walkCycle: number
+    walkCycle: number,
+    isOutdoorsInRain: boolean
   ): { tipPos: THREE.Vector3; hoveredTag: SurfaceTag } {
     this.elapsed += dt;
 
-    // Smoothly interpolate horizontal cane sweep + gentle walking cadence swing
-    const walkSwing = isWalking ? Math.sin(walkCycle * 1.35) * 0.22 : Math.sin(this.elapsed * 1.4) * 0.03;
-    const desiredSweep = Math.max(-1, Math.min(1, targetSweepInput * 0.85 + walkSwing));
-    const prevSweep = this.currentSweep;
-    this.currentSweep += (desiredSweep - this.currentSweep) * Math.min(1, dt * 10.0);
+    const targetRough = isOutdoorsInRain ? 0.11 : 0.24;
+    this.whiteShaftMat.roughness +=
+      (targetRough - this.whiteShaftMat.roughness) * Math.min(1, dt * 2.0);
+    this.redReflectiveMat.roughness +=
+      (targetRough - this.redReflectiveMat.roughness) * Math.min(1, dt * 2.0);
 
-    // Tap strike arc animation
-    let tapPitchOffset = 0;
+    if (this.isCharging) {
+      this.chargeHoldSec += dt;
+      this.chargeProgress = Math.min(1.0, this.chargeHoldSec / this.heavyThresholdSec);
+    }
+
+    // Automatically relax target back to aimed center (0) once continuous tap rhythm times out
+    if (!this.isCharging && this.elapsed - this.lastTapTimeSec > this.comboTimeoutSec) {
+      this.targetSidePos = 0;
+    }
+
+    // Smoothly glide cane toward target side + subtle manual look sway
+    const idleSway = isWalking
+      ? Math.sin(walkCycle * 1.1) * 0.05
+      : Math.sin(this.elapsed * 1.3) * 0.018;
+    const desiredSide = Math.max(
+      -0.8,
+      Math.min(0.8, this.targetSidePos + targetSweepInput * 0.16 + idleSway)
+    );
+    this.currentSidePos += (desiredSide - this.currentSidePos) * Math.min(1, dt * 11.0);
+
+    // Strike downward arc & smooth lift rebound (two-point touch bounce!)
+    let pitchOffset = this.chargeProgress * 0.18;
+    let rollOffset = -this.currentSidePos * 0.06;
     if (this.tapAnimTimer > 0) {
       this.tapAnimTimer = Math.max(0, this.tapAnimTimer - dt);
       const p = 1.0 - this.tapAnimTimer / this.tapAnimDuration;
-      // Fast downward tap and rebound
-      tapPitchOffset = -Math.sin(p * Math.PI) * 0.22;
+      // Sharp tap down in first 35%, then crisp lift into ready hover
+      if (p < 0.35) {
+        pitchOffset = -Math.sin((p / 0.35) * Math.PI * 0.5) * 0.22;
+      } else {
+        const rebound = (p - 0.35) / 0.65;
+        pitchOffset = -0.22 * Math.cos(rebound * Math.PI * 0.5) + Math.sin(rebound * Math.PI) * 0.06;
+      }
     }
 
-    this.canePivot.rotation.y = -this.currentSweep * 0.52;
-    this.canePivot.rotation.x = tapPitchOffset;
+    this.canePivot.rotation.y = this.computePivotYaw(this.currentSidePos);
+    this.canePivot.rotation.x = pitchOffset;
+    this.canePivot.rotation.z = rollOffset;
 
     if (!this.equipped) {
       return { tipPos: this.tipWorldPos.set(0, -50, 0), hoveredTag: 'normal' };
     }
 
+    // Update cane tip world position for real-time intimate tip micro-glow ONLY (no auto-tap!)
     const hit = this.performRaycast();
-    const sweepSpeed = Math.abs(this.currentSweep - prevSweep) / Math.max(0.001, dt);
-
-    // Tactile sweep feedback: when sweeping across tactile bricks or striking bikes/barriers/cat
-    const tagChanged = hit.tag !== this.lastSweptTag;
-    const isNotableSurface =
-      hit.tag === 'tactile_line' ||
-      hit.tag === 'tactile_dot' ||
-      hit.tag === 'bike' ||
-      hit.tag === 'barrier' ||
-      hit.tag === 'cat';
-
-    if (
-      (tagChanged && isNotableSurface && this.elapsed - this.lastAutoSweepTime > 0.36) ||
-      (sweepSpeed > 1.25 && isNotableSurface && this.elapsed - this.lastAutoSweepTime > 0.52)
-    ) {
-      this.lastAutoSweepTime = this.elapsed;
-      this.onHit({
-        point: hit.point,
-        tag: hit.tag,
-        pan: Math.max(-0.85, Math.min(0.85, this.currentSweep * 0.9)),
-        isManualTap: false,
-      });
-    }
-    this.lastSweptTag = hit.tag;
-
     return {
       tipPos: hit.point,
       hoveredTag: hit.tag,

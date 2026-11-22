@@ -1,18 +1,27 @@
 import * as THREE from 'three';
 
+export interface PBRMapGroup {
+  map: THREE.CanvasTexture;
+  normalMap: THREE.CanvasTexture;
+  roughnessMap?: THREE.CanvasTexture;
+}
+
 export interface ProceduralTextureSet {
-  interiorTile: { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture; roughnessMap: THREE.CanvasTexture };
-  plasterWall: { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture };
-  brickWall: { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture };
-  wetSidewalk: { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture; roughnessMap: THREE.CanvasTexture };
-  wetAsphalt: { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture; roughnessMap: THREE.CanvasTexture };
-  tactileLine: { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture; roughnessMap: THREE.CanvasTexture };
-  tactileDot: { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture; roughnessMap: THREE.CanvasTexture };
-  barrierStripe: { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture };
-  crosswalk: { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture; roughnessMap: THREE.CanvasTexture };
-  darkWood: { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture };
-  warmWood: { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture };
-  bamboo: { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture };
+  interiorTile: PBRMapGroup;
+  plasterWall: PBRMapGroup;
+  brickWall: PBRMapGroup;
+  shutterMetal: PBRMapGroup;
+  wetSidewalk: PBRMapGroup;
+  wetAsphalt: PBRMapGroup;
+  tactileLine: PBRMapGroup;
+  tactileDot: PBRMapGroup;
+  barrierStripe: PBRMapGroup;
+  crosswalk: PBRMapGroup;
+  darkWood: PBRMapGroup;
+  warmWood: PBRMapGroup;
+  bamboo: PBRMapGroup;
+  convenienceSign: THREE.CanvasTexture;
+  stallBanner: THREE.CanvasTexture;
 }
 
 function makeCanvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
@@ -34,12 +43,63 @@ function toTexture(
   tex.wrapT = THREE.RepeatWrapping;
   tex.repeat.set(repeatX, repeatY);
   tex.colorSpace = isColor ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-  tex.anisotropy = 4;
+  tex.anisotropy = 8;
   tex.needsUpdate = true;
   return tex;
 }
 
-/** Deterministic fast pseudo-random for reproducible organic grain */
+/**
+ * Converts a greyscale height canvas into a true tangent-space RGB NormalMap via Sobel operator.
+ * Dramatic realism boost under PBR point/directional lights and PMREM IBL!
+ */
+function heightToNormalTexture(
+  heightCanvas: HTMLCanvasElement,
+  strength: number,
+  repeatX = 1,
+  repeatY = 1
+): THREE.CanvasTexture {
+  const w = heightCanvas.width;
+  const h = heightCanvas.height;
+  const srcCtx = heightCanvas.getContext('2d')!;
+  const src = srcCtx.getImageData(0, 0, w, h).data;
+
+  const [outCanvas, outCtx] = makeCanvas(w, h);
+  const outImg = outCtx.createImageData(w, h);
+  const dst = outImg.data;
+
+  const sample = (x: number, y: number) => {
+    const cx = ((x % w) + w) % w;
+    const cy = ((y % h) + h) % h;
+    return src[(cy * w + cx) * 4] / 255.0;
+  };
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const tl = sample(x - 1, y - 1);
+      const t = sample(x, y - 1);
+      const tr = sample(x + 1, y - 1);
+      const l = sample(x - 1, y);
+      const r = sample(x + 1, y);
+      const bl = sample(x - 1, y + 1);
+      const b = sample(x, y + 1);
+      const br = sample(x + 1, y + 1);
+
+      const dx = (tr + 2 * r + br - (tl + 2 * l + bl)) * strength;
+      const dy = (bl + 2 * b + br - (tl + 2 * t + tr)) * strength;
+      const dz = 1.0;
+      const invLen = 1.0 / Math.hypot(dx, dy, dz);
+
+      const idx = (y * w + x) * 4;
+      dst[idx] = Math.round((-dx * invLen * 0.5 + 0.5) * 255);
+      dst[idx + 1] = Math.round((-dy * invLen * 0.5 + 0.5) * 255);
+      dst[idx + 2] = Math.round((dz * invLen * 0.5 + 0.5) * 255);
+      dst[idx + 3] = 255;
+    }
+  }
+  outCtx.putImageData(outImg, 0, 0);
+  return toTexture(outCanvas, false, repeatX, repeatY);
+}
+
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
@@ -55,39 +115,37 @@ export function createProceduralTextures(): ProceduralTextureSet {
   const rand = mulberry32(20261130);
 
   // 1. Matte Dark Grey Interior Foyer Tile
-  const createInteriorTile = () => {
+  const createInteriorTile = (): PBRMapGroup => {
     const size = 256;
     const [cCol, col] = makeCanvas(size, size);
-    const [cBump, bump] = makeCanvas(size, size);
-    const [cRough, rough] = makeCanvas(size, size);
+    const [cH, hCtx] = makeCanvas(size, size);
+    const [cR, rCtx] = makeCanvas(size, size);
 
-    col.fillStyle = '#2d3138';
+    col.fillStyle = '#30343c';
     col.fillRect(0, 0, size, size);
-    bump.fillStyle = '#d8d8d8';
-    bump.fillRect(0, 0, size, size);
-    rough.fillStyle = '#b8b8b8'; // ~0.72 matte roughness
-    rough.fillRect(0, 0, size, size);
+    hCtx.fillStyle = '#dcdcdc';
+    hCtx.fillRect(0, 0, size, size);
+    rCtx.fillStyle = '#a8a8a8';
+    rCtx.fillRect(0, 0, size, size);
 
-    // Subtle stone mottling & scuffs
-    for (let i = 0; i < 900; i++) {
+    for (let i = 0; i < 1000; i++) {
       const x = rand() * size;
       const y = rand() * size;
       const r = 2 + rand() * 14;
-      const v = Math.floor(38 + rand() * 24);
-      col.fillStyle = `rgba(${v}, ${v + 2}, ${v + 5}, 0.16)`;
+      const v = Math.floor(38 + rand() * 26);
+      col.fillStyle = `rgba(${v},${v + 2},${v + 5},0.16)`;
       col.beginPath();
       col.arc(x, y, r, 0, Math.PI * 2);
       col.fill();
 
-      const rv = Math.floor(150 + rand() * 65);
-      rough.fillStyle = `rgba(${rv},${rv},${rv},0.22)`;
-      rough.fillRect(x, y, r, r * 0.6);
+      const rv = Math.floor(135 + rand() * 80);
+      rCtx.fillStyle = `rgba(${rv},${rv},${rv},0.22)`;
+      rCtx.fillRect(x, y, r, r * 0.6);
     }
 
-    // 2x2 tile grid seams
-    const drawSeams = (ctx: CanvasRenderingContext2D, stroke: string, lineW: number) => {
+    const drawSeams = (ctx: CanvasRenderingContext2D, stroke: string, w: number) => {
       ctx.strokeStyle = stroke;
-      ctx.lineWidth = lineW;
+      ctx.lineWidth = w;
       for (const pos of [0, size / 2]) {
         ctx.beginPath();
         ctx.moveTo(pos, 0);
@@ -97,66 +155,64 @@ export function createProceduralTextures(): ProceduralTextureSet {
         ctx.stroke();
       }
     };
-    drawSeams(col, '#181b20', 4);
-    drawSeams(bump, '#303030', 5);
-    drawSeams(rough, '#f0f0f0', 5);
+    drawSeams(col, '#16191e', 4);
+    drawSeams(hCtx, '#202020', 5);
+    drawSeams(rCtx, '#f2f2f2', 5);
 
     return {
       map: toTexture(cCol, true, 3, 6),
-      bumpMap: toTexture(cBump, false, 3, 6),
-      roughnessMap: toTexture(cRough, false, 3, 6),
+      normalMap: heightToNormalTexture(cH, 2.2, 3, 6),
+      roughnessMap: toTexture(cR, false, 3, 6),
     };
   };
 
-  // 2. Mottled Foyer Plaster Wall
-  const createPlasterWall = () => {
+  // 2. Mottled Aged Plaster Wall
+  const createPlasterWall = (): PBRMapGroup => {
     const size = 256;
     const [cCol, col] = makeCanvas(size, size);
-    const [cBump, bump] = makeCanvas(size, size);
+    const [cH, hCtx] = makeCanvas(size, size);
 
-    col.fillStyle = '#55585e';
+    col.fillStyle = '#5a5e66';
     col.fillRect(0, 0, size, size);
-    bump.fillStyle = '#808080';
-    bump.fillRect(0, 0, size, size);
+    hCtx.fillStyle = '#808080';
+    hCtx.fillRect(0, 0, size, size);
 
-    for (let i = 0; i < 1200; i++) {
+    for (let i = 0; i < 1400; i++) {
       const x = rand() * size;
       const y = rand() * size;
-      const r = 4 + rand() * 26;
-      const shade = Math.floor(62 + rand() * 44);
-      col.fillStyle = `rgba(${shade}, ${shade + 1}, ${shade + 3}, 0.12)`;
+      const r = 3 + rand() * 24;
+      const shade = Math.floor(66 + rand() * 44);
+      col.fillStyle = `rgba(${shade},${shade + 1},${shade + 3},0.12)`;
       col.beginPath();
       col.arc(x, y, r, 0, Math.PI * 2);
       col.fill();
-
-      const b = Math.floor(105 + rand() * 50);
-      bump.fillStyle = `rgba(${b},${b},${b},0.18)`;
-      bump.fillRect(x, y, r * 0.5, r * 0.5);
+      const b = Math.floor(100 + rand() * 60);
+      hCtx.fillStyle = `rgba(${b},${b},${b},0.22)`;
+      hCtx.fillRect(x, y, r * 0.4, r * 0.4);
     }
 
-    // Subtle damp baseboard grime gradient at bottom
-    const grad = col.createLinearGradient(0, size * 0.75, 0, size);
-    grad.addColorStop(0, 'rgba(20,22,26,0)');
-    grad.addColorStop(1, 'rgba(20,22,26,0.45)');
+    const grad = col.createLinearGradient(0, size * 0.72, 0, size);
+    grad.addColorStop(0, 'rgba(18,20,24,0)');
+    grad.addColorStop(1, 'rgba(18,20,24,0.52)');
     col.fillStyle = grad;
-    col.fillRect(0, size * 0.75, size, size * 0.25);
+    col.fillRect(0, size * 0.72, size, size * 0.28);
 
     return {
       map: toTexture(cCol, true, 2, 1),
-      bumpMap: toTexture(cBump, false, 2, 1),
+      normalMap: heightToNormalTexture(cH, 1.8, 2, 1),
     };
   };
 
-  // 3. Exterior Urban Brick Wall
-  const createBrickWall = () => {
+  // 3. Weathered Urban Brick Wall
+  const createBrickWall = (): PBRMapGroup => {
     const size = 256;
     const [cCol, col] = makeCanvas(size, size);
-    const [cBump, bump] = makeCanvas(size, size);
+    const [cH, hCtx] = makeCanvas(size, size);
 
-    col.fillStyle = '#2a2625'; // Mortar dark grey-brown
+    col.fillStyle = '#262321';
     col.fillRect(0, 0, size, size);
-    bump.fillStyle = '#353535';
-    bump.fillRect(0, 0, size, size);
+    hCtx.fillStyle = '#282828';
+    hCtx.fillRect(0, 0, size, size);
 
     const rows = 8;
     const cols = 4;
@@ -166,310 +222,325 @@ export function createProceduralTextures(): ProceduralTextureSet {
     for (let r = 0; r < rows; r++) {
       const offset = (r % 2) * (colW * 0.5);
       for (let c = -1; c <= cols; c++) {
-        const bx = c * colW + offset + 2;
-        const by = r * rowH + 2;
-        const bw = colW - 4;
-        const bh = rowH - 4;
+        const bx = c * colW + offset + 2.5;
+        const by = r * rowH + 2.5;
+        const bw = colW - 5;
+        const bh = rowH - 5;
 
-        const baseR = 92 + Math.floor(rand() * 36);
-        const baseG = 68 + Math.floor(rand() * 24);
-        const baseB = 56 + Math.floor(rand() * 20);
+        const baseR = 96 + Math.floor(rand() * 38);
+        const baseG = 70 + Math.floor(rand() * 26);
+        const baseB = 58 + Math.floor(rand() * 20);
         col.fillStyle = `rgb(${baseR},${baseG},${baseB})`;
         col.fillRect(bx, by, bw, bh);
 
-        bump.fillStyle = `rgb(${185 + Math.floor(rand() * 45)},${185},${185})`;
-        bump.fillRect(bx, by, bw, bh);
+        const hv = 195 + Math.floor(rand() * 45);
+        hCtx.fillStyle = `rgb(${hv},${hv},${hv})`;
+        hCtx.fillRect(bx, by, bw, bh);
       }
+    }
+
+    // Damp rain streaks from top
+    for (let i = 0; i < 36; i++) {
+      const sx = rand() * size;
+      const sh = 40 + rand() * 140;
+      const g = col.createLinearGradient(sx, 0, sx, sh);
+      g.addColorStop(0, 'rgba(12,14,18,0.42)');
+      g.addColorStop(1, 'rgba(12,14,18,0)');
+      col.fillStyle = g;
+      col.fillRect(sx, 0, 4 + rand() * 8, sh);
     }
 
     return {
       map: toTexture(cCol, true, 6, 2),
-      bumpMap: toTexture(cBump, false, 6, 2),
+      normalMap: heightToNormalTexture(cH, 2.8, 6, 2),
     };
   };
 
-  // 4. Wet Sidewalk Stone Pavers (Low Roughness Puddles!)
-  const createWetSidewalk = () => {
+  // 4. Corrugated Rolling Shop Shutter Metal
+  const createShutterMetal = (): PBRMapGroup => {
     const size = 256;
     const [cCol, col] = makeCanvas(size, size);
-    const [cBump, bump] = makeCanvas(size, size);
-    const [cRough, rough] = makeCanvas(size, size);
+    const [cH, hCtx] = makeCanvas(size, size);
+    const [cR, rCtx] = makeCanvas(size, size);
 
-    col.fillStyle = '#383d44';
+    for (let y = 0; y < size; y++) {
+      const slat = Math.sin((y / size) * Math.PI * 2 * 16) * 0.5 + 0.5;
+      const v = Math.floor(54 + slat * 34);
+      col.fillStyle = `rgb(${v},${v + 4},${v + 9})`;
+      col.fillRect(0, y, size, 1);
+
+      const hv = Math.floor(60 + slat * 185);
+      hCtx.fillStyle = `rgb(${hv},${hv},${hv})`;
+      hCtx.fillRect(0, y, size, 1);
+
+      const rv = Math.floor(95 + (1 - slat) * 70);
+      rCtx.fillStyle = `rgb(${rv},${rv},${rv})`;
+      rCtx.fillRect(0, y, size, 1);
+    }
+
+    return {
+      map: toTexture(cCol, true, 1, 1),
+      normalMap: heightToNormalTexture(cH, 3.0, 1, 1),
+      roughnessMap: toTexture(cR, false, 1, 1),
+    };
+  };
+
+  // 5. Wet Sidewalk Stone Pavers (High Detail + True NormalMap!)
+  const createWetSidewalk = (): PBRMapGroup => {
+    const size = 512;
+    const [cCol, col] = makeCanvas(size, size);
+    const [cH, hCtx] = makeCanvas(size, size);
+    const [cR, rCtx] = makeCanvas(size, size);
+
+    col.fillStyle = '#252930';
     col.fillRect(0, 0, size, size);
-    bump.fillStyle = '#b0b0b0';
-    bump.fillRect(0, 0, size, size);
-    rough.fillStyle = '#787878'; // ~0.47 damp base
-    rough.fillRect(0, 0, size, size);
+    hCtx.fillStyle = '#303030';
+    hCtx.fillRect(0, 0, size, size);
+    rCtx.fillStyle = '#6c6c6c';
+    rCtx.fillRect(0, 0, size, size);
 
-    // Paver grid 4x4
     const step = size / 4;
     for (let gy = 0; gy < 4; gy++) {
       for (let gx = 0; gx < 4; gx++) {
-        const tone = 48 + Math.floor(rand() * 20);
+        const tone = 50 + Math.floor(rand() * 24);
         col.fillStyle = `rgb(${tone},${tone + 4},${tone + 9})`;
-        col.fillRect(gx * step + 2, gy * step + 2, step - 4, step - 4);
-        bump.fillStyle = `rgb(${175 + Math.floor(rand() * 35)},180,180)`;
-        bump.fillRect(gx * step + 2, gy * step + 2, step - 4, step - 4);
+        col.fillRect(gx * step + 3, gy * step + 3, step - 6, step - 6);
+
+        const hv = 185 + Math.floor(rand() * 35);
+        hCtx.fillStyle = `rgb(${hv},${hv},${hv})`;
+        hCtx.fillRect(gx * step + 4, gy * step + 4, step - 8, step - 8);
       }
     }
 
-    // Stone grain
-    for (let i = 0; i < 1400; i++) {
+    // Mineral stone aggregate
+    for (let i = 0; i < 5000; i++) {
       const x = rand() * size;
       const y = rand() * size;
-      const v = 30 + Math.floor(rand() * 45);
-      col.fillStyle = `rgba(${v},${v + 3},${v + 6},0.22)`;
+      const v = 30 + Math.floor(rand() * 52);
+      col.fillStyle = `rgba(${v},${v + 3},${v + 7},0.22)`;
       col.fillRect(x, y, 2, 2);
-      const b = 130 + Math.floor(rand() * 90);
-      bump.fillStyle = `rgba(${b},${b},${b},0.25)`;
-      bump.fillRect(x, y, 2, 2);
+      const hv = 130 + Math.floor(rand() * 100);
+      hCtx.fillStyle = `rgba(${hv},${hv},${hv},0.22)`;
+      hCtx.fillRect(x, y, 2, 2);
     }
 
-    // Wet specular puddles (very low roughness = shiny reflections!)
-    for (let p = 0; p < 10; p++) {
+    // Damp patches
+    for (let p = 0; p < 14; p++) {
       const px = rand() * size;
       const py = rand() * size;
-      const pr = 18 + rand() * 42;
-      const g = rough.createRadialGradient(px, py, 2, px, py, pr);
-      g.addColorStop(0, 'rgba(22,22,22,0.92)'); // roughness ~0.09 mirror-wet puddle
-      g.addColorStop(1, 'rgba(110,110,110,0)');
-      rough.fillStyle = g;
-      rough.beginPath();
-      rough.arc(px, py, pr, 0, Math.PI * 2);
-      rough.fill();
-
-      // Slightly darker wet stone under puddle
-      const cg = col.createRadialGradient(px, py, 2, px, py, pr);
-      cg.addColorStop(0, 'rgba(18,22,28,0.42)');
-      cg.addColorStop(1, 'rgba(18,22,28,0)');
-      col.fillStyle = cg;
-      col.beginPath();
-      col.arc(px, py, pr, 0, Math.PI * 2);
-      col.fill();
+      const pr = 30 + rand() * 80;
+      const g = rCtx.createRadialGradient(px, py, 4, px, py, pr);
+      g.addColorStop(0, 'rgba(20,20,20,0.92)');
+      g.addColorStop(1, 'rgba(108,108,108,0)');
+      rCtx.fillStyle = g;
+      rCtx.beginPath();
+      rCtx.arc(px, py, pr, 0, Math.PI * 2);
+      rCtx.fill();
     }
 
     return {
       map: toTexture(cCol, true, 3, 14),
-      bumpMap: toTexture(cBump, false, 3, 14),
-      roughnessMap: toTexture(cRough, false, 3, 14),
+      normalMap: heightToNormalTexture(cH, 2.4, 3, 14),
+      roughnessMap: toTexture(cR, false, 3, 14),
     };
   };
 
-  // 5. Wet Asphalt Roadway
-  const createWetAsphalt = () => {
-    const size = 256;
+  // 6. Wet Asphalt Roadway
+  const createWetAsphalt = (): PBRMapGroup => {
+    const size = 512;
     const [cCol, col] = makeCanvas(size, size);
-    const [cBump, bump] = makeCanvas(size, size);
-    const [cRough, rough] = makeCanvas(size, size);
+    const [cH, hCtx] = makeCanvas(size, size);
+    const [cR, rCtx] = makeCanvas(size, size);
 
-    col.fillStyle = '#1d2128';
+    col.fillStyle = '#1b1f26';
     col.fillRect(0, 0, size, size);
-    bump.fillStyle = '#808080';
-    bump.fillRect(0, 0, size, size);
-    rough.fillStyle = '#686868';
-    rough.fillRect(0, 0, size, size);
+    hCtx.fillStyle = '#808080';
+    hCtx.fillRect(0, 0, size, size);
+    rCtx.fillStyle = '#5e5e5e';
+    rCtx.fillRect(0, 0, size, size);
 
-    // Asphalt mineral aggregate
-    for (let i = 0; i < 2800; i++) {
+    for (let i = 0; i < 8500; i++) {
       const x = rand() * size;
       const y = rand() * size;
-      const v = 18 + Math.floor(rand() * 42);
+      const v = 16 + Math.floor(rand() * 44);
       col.fillStyle = `rgb(${v},${v + 2},${v + 5})`;
       col.fillRect(x, y, 2, 2);
-
-      const bv = 80 + Math.floor(rand() * 130);
-      bump.fillStyle = `rgb(${bv},${bv},${bv})`;
-      bump.fillRect(x, y, 2, 2);
+      const hv = 75 + Math.floor(rand() * 145);
+      hCtx.fillStyle = `rgb(${hv},${hv},${hv})`;
+      hCtx.fillRect(x, y, 2, 2);
     }
 
-    // Wet rain slick patches
-    for (let p = 0; p < 12; p++) {
+    for (let p = 0; p < 16; p++) {
       const px = rand() * size;
       const py = rand() * size;
-      const pr = 24 + rand() * 52;
-      const g = rough.createRadialGradient(px, py, 4, px, py, pr);
-      g.addColorStop(0, 'rgba(18,18,18,0.95)');
-      g.addColorStop(1, 'rgba(105,105,105,0)');
-      rough.fillStyle = g;
-      rough.beginPath();
-      rough.arc(px, py, pr, 0, Math.PI * 2);
-      rough.fill();
+      const pr = 40 + rand() * 90;
+      const g = rCtx.createRadialGradient(px, py, 6, px, py, pr);
+      g.addColorStop(0, 'rgba(16,16,16,0.95)');
+      g.addColorStop(1, 'rgba(94,94,94,0)');
+      rCtx.fillStyle = g;
+      rCtx.beginPath();
+      rCtx.arc(px, py, pr, 0, Math.PI * 2);
+      rCtx.fill();
     }
 
     return {
       map: toTexture(cCol, true, 6, 12),
-      bumpMap: toTexture(cBump, false, 6, 12),
-      roughnessMap: toTexture(cRough, false, 6, 12),
+      normalMap: heightToNormalTexture(cH, 1.9, 6, 12),
+      roughnessMap: toTexture(cR, false, 6, 12),
     };
   };
 
-  // 6. Yellow Raised Bar Tactile Brick (tactile_line)
-  const createTactileLine = () => {
-    const size = 256;
+  // 7. Yellow Raised Bar Tactile Brick (Crisp 512px NormalMap!)
+  const createTactileLine = (): PBRMapGroup => {
+    const size = 512;
     const [cCol, col] = makeCanvas(size, size);
-    const [cBump, bump] = makeCanvas(size, size);
-    const [cRough, rough] = makeCanvas(size, size);
+    const [cH, hCtx] = makeCanvas(size, size);
+    const [cR, rCtx] = makeCanvas(size, size);
 
-    // Rich warm urban yellow base
-    col.fillStyle = '#c8921e';
+    col.fillStyle = '#c48d1a';
     col.fillRect(0, 0, size, size);
-    bump.fillStyle = '#555555';
-    bump.fillRect(0, 0, size, size);
-    rough.fillStyle = '#707070';
-    rough.fillRect(0, 0, size, size);
+    hCtx.fillStyle = '#505050';
+    hCtx.fillRect(0, 0, size, size);
+    rCtx.fillStyle = '#686868';
+    rCtx.fillRect(0, 0, size, size);
 
-    // Outer tile mortar border
-    col.strokeStyle = '#5a4212';
-    col.lineWidth = 8;
-    col.strokeRect(2, 2, size - 4, size - 4);
-    bump.strokeStyle = '#181818';
-    bump.lineWidth = 10;
-    bump.strokeRect(2, 2, size - 4, size - 4);
+    col.strokeStyle = '#533c0f';
+    col.lineWidth = 14;
+    col.strokeRect(4, 4, size - 8, size - 8);
+    hCtx.strokeStyle = '#121212';
+    hCtx.lineWidth = 16;
+    hCtx.strokeRect(4, 4, size - 8, size - 8);
 
-    // 4 raised longitudinal guiding bars
     const barCount = 4;
-    const marginX = 24;
-    const usableW = size - marginX * 2;
-    const slotW = usableW / barCount;
+    const marginX = 46;
+    const slotW = (size - marginX * 2) / barCount;
 
     for (let i = 0; i < barCount; i++) {
-      const bx = marginX + i * slotW + 7;
-      const bw = slotW - 14;
-      const by = 18;
-      const bh = size - 36;
+      const bx = marginX + i * slotW + 14;
+      const bw = slotW - 28;
+      const by = 34;
+      const bh = size - 68;
 
-      // Subtle bevel shadow in groove
-      col.fillStyle = '#9c6e12';
-      col.fillRect(bx - 3, by - 2, bw + 6, bh + 4);
+      col.fillStyle = '#92660f';
+      col.fillRect(bx - 5, by - 4, bw + 10, bh + 8);
 
-      // Raised bar top highlight
       const grad = col.createLinearGradient(bx, 0, bx + bw, 0);
-      grad.addColorStop(0, '#be8819');
-      grad.addColorStop(0.35, '#eab32e');
-      grad.addColorStop(0.7, '#dfa423');
-      grad.addColorStop(1, '#a97714');
+      grad.addColorStop(0, '#ba8417');
+      grad.addColorStop(0.35, '#f0ba32');
+      grad.addColorStop(0.7, '#e2a623');
+      grad.addColorStop(1, '#a17012');
       col.fillStyle = grad;
       col.beginPath();
-      col.roundRect(bx, by, bw, bh, 8);
+      col.roundRect(bx, by, bw, bh, 14);
       col.fill();
 
-      // Strong raised bump
-      const bGrad = bump.createLinearGradient(bx, 0, bx + bw, 0);
-      bGrad.addColorStop(0, '#909090');
-      bGrad.addColorStop(0.25, '#f5f5f5');
-      bGrad.addColorStop(0.75, '#f5f5f5');
-      bGrad.addColorStop(1, '#909090');
-      bump.fillStyle = bGrad;
-      bump.beginPath();
-      bump.roundRect(bx, by, bw, bh, 8);
-      bump.fill();
+      const bGrad = hCtx.createLinearGradient(bx, 0, bx + bw, 0);
+      bGrad.addColorStop(0, '#787878');
+      bGrad.addColorStop(0.22, '#f8f8f8');
+      bGrad.addColorStop(0.78, '#f8f8f8');
+      bGrad.addColorStop(1, '#787878');
+      hCtx.fillStyle = bGrad;
+      hCtx.beginPath();
+      hCtx.roundRect(bx, by, bw, bh, 14);
+      hCtx.fill();
 
-      rough.fillStyle = '#505050';
-      rough.fillRect(bx, by, bw, bh);
+      rCtx.fillStyle = '#383838'; // Wet glossy ridge tops catching reflections!
+      rCtx.fillRect(bx, by, bw, bh);
     }
 
-    // Subtle urban street dust/scuffs
-    for (let i = 0; i < 450; i++) {
-      const x = rand() * size;
-      const y = rand() * size;
-      col.fillStyle = `rgba(55, 42, 18, ${rand() * 0.16})`;
-      col.fillRect(x, y, 3, 3);
+    for (let i = 0; i < 1400; i++) {
+      col.fillStyle = `rgba(52,38,14,${rand() * 0.16})`;
+      col.fillRect(rand() * size, rand() * size, 4, 4);
     }
 
     return {
       map: toTexture(cCol, true, 1, 56),
-      bumpMap: toTexture(cBump, false, 1, 56),
-      roughnessMap: toTexture(cRough, false, 1, 56),
+      normalMap: heightToNormalTexture(cH, 3.4, 1, 56),
+      roughnessMap: toTexture(cR, false, 1, 56),
     };
   };
 
-  // 7. Yellow Raised Blister Dot Warning Brick (tactile_dot)
-  const createTactileDot = () => {
-    const size = 256;
+  // 8. Yellow Raised Blister Dot Warning Brick (Crisp 512px NormalMap!)
+  const createTactileDot = (): PBRMapGroup => {
+    const size = 512;
     const [cCol, col] = makeCanvas(size, size);
-    const [cBump, bump] = makeCanvas(size, size);
-    const [cRough, rough] = makeCanvas(size, size);
+    const [cH, hCtx] = makeCanvas(size, size);
+    const [cR, rCtx] = makeCanvas(size, size);
 
-    col.fillStyle = '#c6901c';
+    col.fillStyle = '#c48d1a';
     col.fillRect(0, 0, size, size);
-    bump.fillStyle = '#555555';
-    bump.fillRect(0, 0, size, size);
-    rough.fillStyle = '#6e6e6e';
-    rough.fillRect(0, 0, size, size);
+    hCtx.fillStyle = '#505050';
+    hCtx.fillRect(0, 0, size, size);
+    rCtx.fillStyle = '#686868';
+    rCtx.fillRect(0, 0, size, size);
 
-    col.strokeStyle = '#5a4212';
-    col.lineWidth = 8;
-    col.strokeRect(2, 2, size - 4, size - 4);
-    bump.strokeStyle = '#181818';
-    bump.lineWidth = 10;
-    bump.strokeRect(2, 2, size - 4, size - 4);
+    col.strokeStyle = '#533c0f';
+    col.lineWidth = 14;
+    col.strokeRect(4, 4, size - 8, size - 8);
+    hCtx.strokeStyle = '#121212';
+    hCtx.lineWidth = 16;
+    hCtx.strokeRect(4, 4, size - 8, size - 8);
 
-    // 5x5 truncated domes
     const grid = 5;
-    const pad = 26;
+    const pad = 54;
     const step = (size - pad * 2) / (grid - 1);
-    const radius = 15;
+    const radius = 30;
 
     for (let gy = 0; gy < grid; gy++) {
       for (let gx = 0; gx < grid; gx++) {
         const cx = pad + gx * step;
         const cy = pad + gy * step;
 
-        // Groove shadow
-        col.fillStyle = '#946710';
+        col.fillStyle = '#8e620e';
         col.beginPath();
-        col.arc(cx + 1.5, cy + 2, radius + 2, 0, Math.PI * 2);
+        col.arc(cx + 2, cy + 3, radius + 4, 0, Math.PI * 2);
         col.fill();
 
-        // Dome top
-        const cg = col.createRadialGradient(cx - 3, cy - 3, 2, cx, cy, radius);
-        cg.addColorStop(0, '#f3bf38');
+        const cg = col.createRadialGradient(cx - 6, cy - 6, 4, cx, cy, radius);
+        cg.addColorStop(0, '#f5c43c');
         cg.addColorStop(0.7, '#dca221');
-        cg.addColorStop(1, '#a57413');
+        cg.addColorStop(1, '#a06f12');
         col.fillStyle = cg;
         col.beginPath();
         col.arc(cx, cy, radius, 0, Math.PI * 2);
         col.fill();
 
-        // Bump dome
-        const bg = bump.createRadialGradient(cx, cy, 4, cx, cy, radius + 2);
+        const bg = hCtx.createRadialGradient(cx, cy, 8, cx, cy, radius + 4);
         bg.addColorStop(0, '#ffffff');
-        bg.addColorStop(0.75, '#dcdcdc');
-        bg.addColorStop(1, '#555555');
-        bump.fillStyle = bg;
-        bump.beginPath();
-        bump.arc(cx, cy, radius + 2, 0, Math.PI * 2);
-        bump.fill();
-      }
-    }
+        bg.addColorStop(0.72, '#e2e2e2');
+        bg.addColorStop(1, '#505050');
+        hCtx.fillStyle = bg;
+        hCtx.beginPath();
+        hCtx.arc(cx, cy, radius + 4, 0, Math.PI * 2);
+        hCtx.fill();
 
-    for (let i = 0; i < 350; i++) {
-      col.fillStyle = `rgba(50, 38, 15, ${rand() * 0.15})`;
-      col.fillRect(rand() * size, rand() * size, 3, 3);
+        rCtx.fillStyle = '#363636';
+        rCtx.beginPath();
+        rCtx.arc(cx, cy, radius, 0, Math.PI * 2);
+        rCtx.fill();
+      }
     }
 
     return {
       map: toTexture(cCol, true, 7, 2),
-      bumpMap: toTexture(cBump, false, 7, 2),
-      roughnessMap: toTexture(cRough, false, 7, 2),
+      normalMap: heightToNormalTexture(cH, 3.6, 7, 2),
+      roughnessMap: toTexture(cR, false, 7, 2),
     };
   };
 
-  // 8. Orange-White Construction Barrier Board (Matching Ref Image 2!)
-  const createBarrierStripe = () => {
+  // 9. Orange-White Construction Barrier Board
+  const createBarrierStripe = (): PBRMapGroup => {
     const w = 512;
     const h = 160;
     const [cCol, col] = makeCanvas(w, h);
-    const [cBump, bump] = makeCanvas(w, h);
+    const [cH, hCtx] = makeCanvas(w, h);
 
     col.fillStyle = '#e5e7eb';
     col.fillRect(0, 0, w, h);
-    bump.fillStyle = '#909090';
-    bump.fillRect(0, 0, w, h);
+    hCtx.fillStyle = '#909090';
+    hCtx.fillRect(0, 0, w, h);
 
-    // Diagonal orange hazard stripes
-    col.fillStyle = '#dd5814';
+    col.fillStyle = '#e05814';
     const stripeW = 54;
     for (let x = -h; x < w + h; x += stripeW * 2) {
       col.beginPath();
@@ -481,16 +552,14 @@ export function createProceduralTextures(): ProceduralTextureSet {
       col.fill();
     }
 
-    // Center caution stencil plate
-    col.fillStyle = 'rgba(235, 236, 238, 0.92)';
+    col.fillStyle = 'rgba(235,236,238,0.92)';
     col.beginPath();
-    col.roundRect(w / 2 - 105, 18, 210, h - 36, 8);
+    col.roundRect(w / 2 - 115, 18, 230, h - 36, 8);
     col.fill();
 
-    // Warning triangle icon
     col.fillStyle = '#1f2937';
     col.beginPath();
-    col.moveTo(w / 2, 30);
+    col.moveTo(w / 2, 28);
     col.lineTo(w / 2 + 28, 82);
     col.lineTo(w / 2 - 28, 82);
     col.closePath();
@@ -498,78 +567,76 @@ export function createProceduralTextures(): ProceduralTextureSet {
     col.fillStyle = '#f59e0b';
     col.font = 'bold 28px sans-serif';
     col.textAlign = 'center';
-    col.fillText('!', w / 2, 76);
+    col.fillText('!', w / 2, 75);
 
     col.fillStyle = '#1f2937';
-    col.font = 'bold 18px sans-serif';
-    col.fillText('前方施工 · UNDER CONSTRUCTION', w / 2, 115);
+    col.font = 'bold 17px sans-serif';
+    col.fillText('前方施工 · UNDER CONSTRUCTION', w / 2, 114);
 
-    // Grunge & weathered scratches
-    for (let i = 0; i < 650; i++) {
+    for (let i = 0; i < 700; i++) {
       const gx = rand() * w;
       const gy = rand() * h;
       const gr = 1 + rand() * 5;
-      col.fillStyle = `rgba(45, 38, 32, ${rand() * 0.32})`;
+      col.fillStyle = `rgba(42,35,28,${rand() * 0.34})`;
       col.fillRect(gx, gy, gr * 1.6, gr);
-      bump.fillStyle = `rgba(40, 40, 40, ${rand() * 0.35})`;
-      bump.fillRect(gx, gy, gr, gr);
+      hCtx.fillStyle = `rgba(35,35,35,${rand() * 0.4})`;
+      hCtx.fillRect(gx, gy, gr, gr);
     }
 
-    const map = toTexture(cCol, true, 1, 1);
-    const bumpMap = toTexture(cBump, false, 1, 1);
-    return { map, bumpMap };
+    return {
+      map: toTexture(cCol, true, 1, 1),
+      normalMap: heightToNormalTexture(cH, 2.0, 1, 1),
+    };
   };
 
-  // 9. Weathered White Crosswalk Bar Texture (Matching Ref Image 4!)
-  const createCrosswalk = () => {
-    const w = 256;
-    const h = 128;
+  // 10. Weathered White Zebra Crosswalk Paint
+  const createCrosswalk = (): PBRMapGroup => {
+    const w = 512;
+    const h = 256;
     const [cCol, col] = makeCanvas(w, h);
-    const [cBump, bump] = makeCanvas(w, h);
-    const [cRough, rough] = makeCanvas(w, h);
+    const [cH, hCtx] = makeCanvas(w, h);
+    const [cR, rCtx] = makeCanvas(w, h);
 
-    // Base paint white-grey
-    col.fillStyle = '#dfe4ec';
+    col.fillStyle = '#e2e8f0';
     col.fillRect(0, 0, w, h);
-    bump.fillStyle = '#c8c8c8';
-    bump.fillRect(0, 0, w, h);
-    rough.fillStyle = '#585858';
-    rough.fillRect(0, 0, w, h);
+    hCtx.fillStyle = '#d0d0d0';
+    hCtx.fillRect(0, 0, w, h);
+    rCtx.fillStyle = '#4e4e4e';
+    rCtx.fillRect(0, 0, w, h);
 
-    // Tire wear tracks & chipped asphalt patches showing through
-    for (let i = 0; i < 360; i++) {
+    for (let i = 0; i < 850; i++) {
       const x = rand() * w;
       const y = rand() * h;
-      const onEdge = y < 18 || y > h - 18 || x < 16 || x > w - 16;
-      const rx = (onEdge ? 8 : 4) + rand() * 18;
-      const ry = 2 + rand() * 8;
-      if (rand() < (onEdge ? 0.65 : 0.24)) {
-        col.fillStyle = `rgba(28, 32, 40, ${0.45 + rand() * 0.5})`;
+      const onEdge = y < 32 || y > h - 32 || x < 28 || x > w - 28;
+      const rx = (onEdge ? 14 : 6) + rand() * 28;
+      const ry = 4 + rand() * 14;
+      if (rand() < (onEdge ? 0.68 : 0.24)) {
+        col.fillStyle = `rgba(24,28,36,${0.5 + rand() * 0.48})`;
         col.fillRect(x, y, rx, ry);
-        bump.fillStyle = '#404040';
-        bump.fillRect(x, y, rx, ry);
-        rough.fillStyle = '#202020'; // Wet asphalt showing through worn paint!
-        rough.fillRect(x, y, rx, ry);
+        hCtx.fillStyle = '#383838';
+        hCtx.fillRect(x, y, rx, ry);
+        rCtx.fillStyle = '#181818';
+        rCtx.fillRect(x, y, rx, ry);
       }
     }
 
     return {
       map: toTexture(cCol, true, 1, 1),
-      bumpMap: toTexture(cBump, false, 1, 1),
-      roughnessMap: toTexture(cRough, false, 1, 1),
+      normalMap: heightToNormalTexture(cH, 2.0, 1, 1),
+      roughnessMap: toTexture(cR, false, 1, 1),
     };
   };
 
-  // 10 & 11. Wood Grains (Dark Walnut for Shoe Cabinet & Warm Cedar for Breakfast Stall)
-  const createWood = (baseHex: string, grainRgb: [number, number, number]) => {
+  // 11 & 12. Dark Walnut & Warm Cedar Wood
+  const createWood = (baseHex: string, grainRgb: [number, number, number]): PBRMapGroup => {
     const size = 256;
     const [cCol, col] = makeCanvas(size, size);
-    const [cBump, bump] = makeCanvas(size, size);
+    const [cH, hCtx] = makeCanvas(size, size);
 
     col.fillStyle = baseHex;
     col.fillRect(0, 0, size, size);
-    bump.fillStyle = '#888888';
-    bump.fillRect(0, 0, size, size);
+    hCtx.fillStyle = '#8c8c8c';
+    hCtx.fillRect(0, 0, size, size);
 
     for (let y = 0; y < size; y += 2) {
       const wave = Math.sin(y * 0.08) * 8;
@@ -581,70 +648,104 @@ export function createProceduralTextures(): ProceduralTextureSet {
       col.bezierCurveTo(size * 0.33, y + wave, size * 0.66, y - wave, size, y);
       col.stroke();
 
-      bump.strokeStyle = `rgba(40,40,40,${alpha})`;
-      bump.beginPath();
-      bump.moveTo(0, y);
-      bump.lineTo(size, y);
-      bump.stroke();
+      hCtx.strokeStyle = `rgba(38,38,38,${alpha})`;
+      hCtx.beginPath();
+      hCtx.moveTo(0, y);
+      hCtx.lineTo(size, y);
+      hCtx.stroke();
     }
 
-    // Subtle vertical plank lines
     for (let x = 0; x < size; x += 64) {
-      col.fillStyle = 'rgba(15,10,6,0.35)';
+      col.fillStyle = 'rgba(15,10,6,0.38)';
       col.fillRect(x, 0, 2, size);
-      bump.fillStyle = '#252525';
-      bump.fillRect(x, 0, 3, size);
+      hCtx.fillStyle = '#202020';
+      hCtx.fillRect(x, 0, 3, size);
     }
 
     return {
       map: toTexture(cCol, true, 2, 2),
-      bumpMap: toTexture(cBump, false, 2, 2),
+      normalMap: heightToNormalTexture(cH, 2.0, 2, 2),
     };
   };
 
-  // 12. Bamboo Steamer Texture
-  const createBamboo = () => {
+  // 13. Bamboo Steamer Weave
+  const createBamboo = (): PBRMapGroup => {
     const size = 128;
     const [cCol, col] = makeCanvas(size, size);
-    const [cBump, bump] = makeCanvas(size, size);
+    const [cH, hCtx] = makeCanvas(size, size);
 
-    col.fillStyle = '#b98b52';
+    col.fillStyle = '#be9056';
     col.fillRect(0, 0, size, size);
-    bump.fillStyle = '#909090';
-    bump.fillRect(0, 0, size, size);
+    hCtx.fillStyle = '#909090';
+    hCtx.fillRect(0, 0, size, size);
 
-    // Horizontal bamboo rim bands
     for (const bandY of [8, 56, 68, 116]) {
-      col.fillStyle = '#8c6230';
+      col.fillStyle = '#8b612e';
       col.fillRect(0, bandY, size, 8);
-      bump.fillStyle = '#e0e0e0';
-      bump.fillRect(0, bandY, size, 8);
+      hCtx.fillStyle = '#e8e8e8';
+      hCtx.fillRect(0, bandY, size, 8);
     }
-
-    // Fine weave lines
     for (let x = 0; x < size; x += 6) {
-      col.fillStyle = 'rgba(70,45,18,0.22)';
+      col.fillStyle = 'rgba(65,42,16,0.25)';
       col.fillRect(x, 0, 2, size);
     }
 
     return {
       map: toTexture(cCol, true, 2, 1),
-      bumpMap: toTexture(cBump, false, 2, 1),
+      normalMap: heightToNormalTexture(cH, 2.4, 2, 1),
     };
+  };
+
+  // 14. Convenience Store Glowing Signboard ("24H 便利店", Ref Image 2!)
+  const createConvenienceSign = (): THREE.CanvasTexture => {
+    const [c, ctx] = makeCanvas(512, 128);
+    ctx.fillStyle = '#f8fafc';
+    ctx.fillRect(0, 0, 512, 128);
+    ctx.fillStyle = '#ea580c';
+    ctx.fillRect(0, 0, 512, 26);
+    ctx.fillStyle = '#16a34a';
+    ctx.fillRect(0, 102, 512, 26);
+    ctx.fillStyle = '#dc2626';
+    ctx.fillRect(0, 86, 512, 14);
+
+    ctx.fillStyle = '#0f172a';
+    ctx.font = 'bold 46px "PingFang SC", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('24H 街角便利店', 256, 72);
+    return toTexture(c, true, 1, 1);
+  };
+
+  // 15. Breakfast Stall Warm Cloth Sign ("现磨豆浆 · 热气蒸包")
+  const createStallBanner = (): THREE.CanvasTexture => {
+    const [c, ctx] = makeCanvas(256, 128);
+    ctx.fillStyle = '#432e22';
+    ctx.fillRect(0, 0, 256, 128);
+    ctx.strokeStyle = 'rgba(245, 190, 105, 0.55)';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(8, 8, 240, 112);
+
+    ctx.fillStyle = '#fde68a';
+    ctx.font = 'bold 42px "PingFang SC", serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('早点 · 热包', 128, 80);
+    return toTexture(c, true, 1, 1);
   };
 
   return {
     interiorTile: createInteriorTile(),
     plasterWall: createPlasterWall(),
     brickWall: createBrickWall(),
+    shutterMetal: createShutterMetal(),
     wetSidewalk: createWetSidewalk(),
     wetAsphalt: createWetAsphalt(),
     tactileLine: createTactileLine(),
     tactileDot: createTactileDot(),
     barrierStripe: createBarrierStripe(),
     crosswalk: createCrosswalk(),
-    darkWood: createWood('#3a261b', [22, 13, 8]),
+    darkWood: createWood('#3a2519', [20, 12, 7]),
     warmWood: createWood('#6e482b', [38, 22, 10]),
     bamboo: createBamboo(),
+    convenienceSign: createConvenienceSign(),
+    stallBanner: createStallBanner(),
   };
 }

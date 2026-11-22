@@ -5,7 +5,9 @@ export interface ControllerCallbacks {
   onFootstep: (pos: THREE.Vector3) => void;
   onObstacleBump: (collider: ColliderBox) => void;
   onAirwallBlocked: () => void;
-  onCanvasQuickTap: () => void;
+  onPrimaryHoldStart: () => void;
+  onPrimaryHoldEnd: () => void;
+  onPointerLockChange: (locked: boolean) => void;
 }
 
 export class FirstPersonController {
@@ -15,11 +17,25 @@ export class FirstPersonController {
     PLAYER_EYE_HEIGHT,
     WAYPOINTS.playerStart.z
   );
-  public yaw = 0; // 0 = facing -Z
-  public pitch = -0.08; // Slightly looking toward ground/cane ahead
+  public yaw = 0;
+  public pitch = -0.09;
   public enabled = false;
+  public attractMode = true;
+  public mouseSensitivity = 1.0;
 
-  /** Normalized horizontal cursor/look offset (-1..+1) driving cane sweep */
+  /** True when Web Pointer Lock API has captured the desktop cursor */
+  public isPointerLocked = false;
+  /** True when CSS 90deg clockwise auto-landscape is active on a portrait mobile screen */
+  public cssRotatedLandscape = false;
+  /** Set true while settings drawer or ending modal is open so canvas doesn't recapture cursor */
+  public modalOpen = false;
+
+  /** Focus Listen Mode (Shift / Right Click / Mobile Listen button) */
+  public isListening = false;
+  public listenBlend = 0;
+  /** True while the kind stranger is gently holding your hand and leading you across the crosswalk */
+  public escortAssistActive = false;
+
   public sweepInput = 0;
   public isMoving = false;
   public walkCycle = 0;
@@ -28,21 +44,22 @@ export class FirstPersonController {
   private colliders: ColliderBox[];
   private callbacks: ControllerCallbacks;
 
-  // Mouse / Touch Look state (isolated from virtual joystick pointerId)
   private lookPointerId: number | null = null;
   private lookStartX = 0;
   private lookStartY = 0;
   private lastLookX = 0;
   private lastLookY = 0;
   private lookMovedDist = 0;
+  private rmbListening = false;
+  private lmbCharging = false;
+  private touchListening = false;
 
-  // Virtual Joystick state (strictly isolated pointerId)
   private joyPointerId: number | null = null;
   private joyOriginX = 0;
   private joyOriginY = 0;
   private joyVec = new THREE.Vector2(0, 0);
 
-  // Step & Shake timers
+  private velocity = new THREE.Vector2(0, 0);
   private stepDistAccum = 0;
   private shakeTimer = 0;
   private shakeDuration = 0.22;
@@ -73,17 +90,49 @@ export class FirstPersonController {
     this.bindEvents();
   }
 
+  public setTouchListening(active: boolean): void {
+    this.touchListening = active;
+  }
+
+  public setCssRotatedLandscape(rotated: boolean): void {
+    this.cssRotatedLandscape = rotated;
+  }
+
+  public requestPointerLock(): void {
+    if (this.modalOpen || !this.enabled || this.isPointerLocked) return;
+    const isCoarse = window.matchMedia?.('(pointer: coarse)').matches;
+    if (isCoarse) return;
+    try {
+      const p = this.domElement.requestPointerLock?.() as unknown as Promise<void> | undefined;
+      if (p && typeof p.catch === 'function') p.catch(() => {});
+    } catch {
+      // Ignore in sandboxed iframes; drag-to-look fallback remains active
+    }
+  }
+
+  public exitPointerLock(): void {
+    try {
+      if (document.pointerLockElement) {
+        document.exitPointerLock?.();
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
   public reset(): void {
-    this.position.set(
-      WAYPOINTS.playerStart.x,
-      PLAYER_EYE_HEIGHT,
-      WAYPOINTS.playerStart.z
-    );
+    this.position.set(WAYPOINTS.playerStart.x, PLAYER_EYE_HEIGHT, WAYPOINTS.playerStart.z);
     this.yaw = 0;
-    this.pitch = -0.08;
+    this.pitch = -0.09;
     this.sweepInput = 0;
     this.joyVec.set(0, 0);
+    this.velocity.set(0, 0);
     this.keys.clear();
+    this.rmbListening = false;
+    this.lmbCharging = false;
+    this.touchListening = false;
+    this.isListening = false;
+    this.listenBlend = 0;
     this.stepDistAccum = 0;
     this.shakeTimer = 0;
     this.syncCamera(0);
@@ -94,8 +143,15 @@ export class FirstPersonController {
     this.shakeTimer = duration;
   }
 
+  /** Maps physical viewport deltas into rotated stage space when CSS 90deg auto-landscape is active */
+  private mapScreenDelta(dx: number, dy: number): { x: number; y: number } {
+    if (this.cssRotatedLandscape) {
+      return { x: dy, y: -dx };
+    }
+    return { x: dx, y: dy };
+  }
+
   private bindEvents(): void {
-    // Keyboard Controls
     window.addEventListener('keydown', (e) => {
       this.keys.add(e.code);
     });
@@ -104,10 +160,45 @@ export class FirstPersonController {
     });
     window.addEventListener('blur', () => {
       this.keys.clear();
+      this.rmbListening = false;
+      if (this.lmbCharging) {
+        this.lmbCharging = false;
+        this.callbacks.onPrimaryHoldEnd();
+      }
     });
 
-    // Bottom-Left Virtual Joystick (Isolated pointerId + stopPropagation!)
-    const maxJoyRadius = 38;
+    // Pointer Lock state listener
+    document.addEventListener('pointerlockchange', () => {
+      this.isPointerLocked = document.pointerLockElement === this.domElement;
+      if (!this.isPointerLocked) {
+        this.rmbListening = false;
+        if (this.lmbCharging) {
+          this.lmbCharging = false;
+          this.callbacks.onPrimaryHoldEnd();
+        }
+      }
+      this.callbacks.onPointerLockChange(this.isPointerLocked);
+    });
+
+    // Raw Mouse Look while Pointer Locked!
+    window.addEventListener('mousemove', (e: MouseEvent) => {
+      if (!this.enabled || !this.isPointerLocked) return;
+      // Guard against browser single-frame pointer-lock spikes
+      const mx = Math.max(-160, Math.min(160, e.movementX));
+      const my = Math.max(-160, Math.min(160, e.movementY));
+
+      const sens = 0.0022 * this.mouseSensitivity;
+      this.yaw -= mx * sens;
+      this.pitch = Math.max(-0.68, Math.min(0.55, this.pitch - my * sens * 0.85));
+
+      // Moving mouse left/right sweeps the guide cane naturally in front of the player!
+      this.sweepInput = Math.max(-1, Math.min(1, this.sweepInput + mx * 0.0055));
+    });
+
+    this.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    // Bottom-Left Virtual Joystick (Isolated pointerId + auto-landscape coordinate transform!)
+    const maxJoyRadius = 36;
     this.joystickZone.addEventListener('pointerdown', (e: PointerEvent) => {
       e.stopPropagation();
       e.preventDefault();
@@ -137,9 +228,28 @@ export class FirstPersonController {
     this.joystickZone.addEventListener('pointerup', releaseJoy);
     this.joystickZone.addEventListener('pointercancel', releaseJoy);
 
-    // Canvas Look & Cane Sweep (Ignores joystick pointerId!)
+    // Canvas Pointer / Mouse Handling:
+    // - Desktop click captures mouse (Pointer Lock) AND once locked, LMB charges/taps cane & RMB listens!
+    // - Touch / Unlocked Mouse smoothly drags camera look!
     this.domElement.addEventListener('pointerdown', (e: PointerEvent) => {
       if (!this.enabled || e.pointerId === this.joyPointerId) return;
+
+      if (e.pointerType === 'mouse') {
+        if (e.button === 2) {
+          this.rmbListening = true;
+          return;
+        }
+        if (e.button === 0) {
+          if (this.isPointerLocked) {
+            this.lmbCharging = true;
+            this.callbacks.onPrimaryHoldStart();
+            return;
+          }
+          // Not yet locked: request Pointer Lock immediately on canvas click!
+          this.requestPointerLock();
+        }
+      }
+
       if (this.lookPointerId !== null) return;
       this.lookPointerId = e.pointerId;
       this.lookStartX = e.clientX;
@@ -150,38 +260,45 @@ export class FirstPersonController {
     });
 
     window.addEventListener('pointermove', (e: PointerEvent) => {
-      if (!this.enabled) return;
-      if (e.pointerId === this.joyPointerId) return;
+      if (!this.enabled || e.pointerId === this.joyPointerId || this.isPointerLocked) return;
 
-      // Desktop passive mouse hover drives natural horizontal cane sweep
+      // Unlocked desktop mouse hover gently sweeps cane
       if (e.pointerType === 'mouse' && this.lookPointerId === null) {
         const normX = (e.clientX / Math.max(1, window.innerWidth)) * 2 - 1;
         this.sweepInput = Math.max(-1, Math.min(1, normX));
       }
 
+      // Touch drag OR unlocked mouse drag turns camera
       if (e.pointerId === this.lookPointerId) {
-        const dx = e.clientX - this.lastLookX;
-        const dy = e.clientY - this.lastLookY;
+        const rawDx = e.clientX - this.lastLookX;
+        const rawDy = e.clientY - this.lastLookY;
         this.lastLookX = e.clientX;
         this.lastLookY = e.clientY;
-        this.lookMovedDist += Math.hypot(dx, dy);
+        this.lookMovedDist += Math.hypot(rawDx, rawDy);
 
-        const sensitivity = e.pointerType === 'touch' ? 0.0046 : 0.0034;
-        this.yaw -= dx * sensitivity;
-        this.pitch = Math.max(-0.58, Math.min(0.45, this.pitch - dy * sensitivity * 0.75));
-
-        // Also sweep cane slightly in direction of look drag
-        this.sweepInput = Math.max(-1, Math.min(1, this.sweepInput + dx * 0.012));
+        const mapped = this.mapScreenDelta(rawDx, rawDy);
+        const sensitivity = (e.pointerType === 'touch' ? 0.0048 : 0.0034) * this.mouseSensitivity;
+        this.yaw -= mapped.x * sensitivity;
+        this.pitch = Math.max(-0.65, Math.min(0.52, this.pitch - mapped.y * sensitivity * 0.78));
+        this.sweepInput = Math.max(-1, Math.min(1, this.sweepInput + mapped.x * 0.012));
       }
     });
 
     const releaseLook = (e: PointerEvent) => {
+      if (e.button === 2) {
+        this.rmbListening = false;
+      }
+      if (e.button === 0 && this.lmbCharging) {
+        this.lmbCharging = false;
+        this.callbacks.onPrimaryHoldEnd();
+        return;
+      }
       if (e.pointerId !== this.lookPointerId) return;
       const dist = Math.hypot(e.clientX - this.lookStartX, e.clientY - this.lookStartY);
       this.lookPointerId = null;
-      // Quick tap/click on canvas (not a drag) triggers cane tap!
       if (dist < 10 && this.lookMovedDist < 14 && this.enabled) {
-        this.callbacks.onCanvasQuickTap();
+        this.callbacks.onPrimaryHoldStart();
+        this.callbacks.onPrimaryHoldEnd();
       }
     };
     window.addEventListener('pointerup', releaseLook);
@@ -189,11 +306,12 @@ export class FirstPersonController {
   }
 
   private updateJoystickFromPointer(clientX: number, clientY: number, maxR: number): void {
-    const dx = clientX - this.joyOriginX;
-    const dy = clientY - this.joyOriginY;
-    const dist = Math.hypot(dx, dy);
+    const rawDx = clientX - this.joyOriginX;
+    const rawDy = clientY - this.joyOriginY;
+    const mapped = this.mapScreenDelta(rawDx, rawDy);
+    const dist = Math.hypot(mapped.x, mapped.y);
     const clamped = Math.min(dist, maxR);
-    const angle = Math.atan2(dy, dx);
+    const angle = Math.atan2(mapped.y, mapped.x);
     const kx = Math.cos(angle) * clamped;
     const ky = Math.sin(angle) * clamped;
     this.joystickKnob.style.transform = `translate(${kx.toFixed(1)}px, ${ky.toFixed(1)}px)`;
@@ -203,25 +321,55 @@ export class FirstPersonController {
   public update(dt: number): void {
     this.clockSec += dt;
 
+    if (this.attractMode) {
+      const swayX = Math.sin(this.clockSec * 0.24) * 0.42;
+      const swayY = Math.cos(this.clockSec * 0.35) * 0.08;
+      this.camera.position.set(
+        0.65 + swayX,
+        1.48 + swayY,
+        -9.6 + Math.sin(this.clockSec * 0.16) * 0.8
+      );
+      this.camera.lookAt(-0.45, 0.92, -23.5);
+      this.camera.fov = 56;
+      this.camera.updateProjectionMatrix();
+      return;
+    }
+
     if (!this.enabled) {
       this.isMoving = false;
       this.syncCamera(dt);
       return;
     }
 
-    // Keyboard Yaw Turn (Q / E or ArrowLeft / ArrowRight)
-    const turnSpeed = 1.65;
+    // Gently return cane sweep toward center when mouse is locked & stationary
+    if (this.isPointerLocked) {
+      this.sweepInput *= Math.pow(0.18, dt);
+    }
+
+    this.isListening =
+      this.keys.has('ShiftLeft') ||
+      this.keys.has('ShiftRight') ||
+      this.rmbListening ||
+      this.touchListening;
+    const listenTarget = this.isListening ? 1.0 : 0.0;
+    this.listenBlend += (listenTarget - this.listenBlend) * Math.min(1, dt * 7.5);
+
+    const targetFov = THREE.MathUtils.lerp(62, 56.5, this.listenBlend);
+    if (Math.abs(this.camera.fov - targetFov) > 0.05) {
+      this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * 8.0);
+      this.camera.updateProjectionMatrix();
+    }
+
+    const turnSpeed = 1.65 * this.mouseSensitivity;
     if (this.keys.has('KeyQ') || this.keys.has('ArrowLeft')) {
       this.yaw += turnSpeed * dt;
       this.sweepInput = Math.max(-1, this.sweepInput - dt * 1.8);
     }
-    if (this.keys.has('KeyE') || this.keys.has('ArrowRight')) {
-      // Note: KeyE also triggers Help when standing right at Crosswalk Node 05; harmless slight turn or guarded
+    if (this.keys.has('ArrowRight')) {
       this.yaw -= turnSpeed * dt;
       this.sweepInput = Math.min(1, this.sweepInput + dt * 1.8);
     }
 
-    // Forward / Strafe Input (WASD + Up/Down + Virtual Joystick)
     let moveForward = 0;
     let moveRight = 0;
 
@@ -230,7 +378,6 @@ export class FirstPersonController {
     if (this.keys.has('KeyD')) moveRight += 1;
     if (this.keys.has('KeyA')) moveRight -= 1;
 
-    // Combine Virtual Joystick
     moveForward += -this.joyVec.y;
     moveRight += this.joyVec.x;
 
@@ -240,25 +387,36 @@ export class FirstPersonController {
       moveRight /= inputLen;
     }
 
-    const walkSpeed = 2.45; // Comfortable ~3 min pace across 45m with exploration
+    const walkSpeed = this.isListening ? 0.58 : 0.92;
     const prevX = this.position.x;
     const prevZ = this.position.z;
 
+    let desiredVx = 0;
+    let desiredVz = 0;
     if (inputLen > 0.04) {
-      // Forward vector in XZ for yaw (yaw=0 -> (0, 0, -1))
       const fwdX = -Math.sin(this.yaw);
       const fwdZ = -Math.cos(this.yaw);
       const rightX = Math.cos(this.yaw);
       const rightZ = -Math.sin(this.yaw);
-
-      const vx = (fwdX * moveForward + rightX * moveRight) * walkSpeed;
-      const vz = (fwdZ * moveForward + rightZ * moveRight) * walkSpeed;
-
-      this.position.x += vx * dt;
-      this.position.z += vz * dt;
+      desiredVx = (fwdX * moveForward + rightX * moveRight) * walkSpeed;
+      desiredVz = (fwdZ * moveForward + rightZ * moveRight) * walkSpeed;
     }
 
-    // Circle-vs-Rectangle Collision Push-out (2 passes for rock-solid corner sliding)
+    // Gentle, reassuring forward-crossing pull while the kind stranger holds your hand across the zebra crossing!
+    if (this.escortAssistActive) {
+      const guidePullX = (0.18 - this.position.x) * 0.55;
+      const guidePullZ = -0.82;
+      desiredVx = desiredVx * 0.4 + guidePullX;
+      desiredVz = Math.min(desiredVz, guidePullZ);
+    }
+
+    const accel = inputLen > 0.04 ? 11.5 : 14.0;
+    this.velocity.x += (desiredVx - this.velocity.x) * Math.min(1, dt * accel);
+    this.velocity.y += (desiredVz - this.velocity.y) * Math.min(1, dt * accel);
+
+    this.position.x += this.velocity.x * dt;
+    this.position.z += this.velocity.y * dt;
+
     for (let pass = 0; pass < 2; pass++) {
       for (const col of this.colliders) {
         if (!col.enabled) continue;
@@ -276,7 +434,6 @@ export class FirstPersonController {
             this.position.x += (dx / dist) * overlap;
             this.position.z += (dz / dist) * overlap;
           } else {
-            // Deep inside fallback: push out along shallowest axis
             const penLeft = Math.abs(this.position.x - col.minX);
             const penRight = Math.abs(col.maxX - this.position.x);
             const penFront = Math.abs(this.position.z - col.minZ);
@@ -305,13 +462,12 @@ export class FirstPersonController {
       }
     }
 
-    // Footstep Distance Tracking
     const movedDist = Math.hypot(this.position.x - prevX, this.position.z - prevZ);
-    this.isMoving = movedDist > 0.002;
+    this.isMoving = movedDist > 0.0015;
     if (this.isMoving) {
       this.stepDistAccum += movedDist;
-      this.walkCycle += movedDist * 3.8;
-      if (this.stepDistAccum >= 0.58) {
+      this.walkCycle += movedDist * 4.8;
+      if (this.stepDistAccum >= 0.42) {
         this.stepDistAccum = 0;
         this.callbacks.onFootstep(this.position);
       }
@@ -321,16 +477,15 @@ export class FirstPersonController {
   }
 
   private syncCamera(dt: number): void {
-    // Subtle natural head-bob while walking
-    const headBobY = this.isMoving ? Math.sin(this.walkCycle * 2.0) * 0.024 : 0;
+    const idleBreathY = Math.sin(this.clockSec * 1.45) * 0.008;
+    const headBobY = this.isMoving ? Math.sin(this.walkCycle * 2.0) * 0.026 : idleBreathY;
 
-    // Obstacle collision micro-shake (0.22s)
     let shakeX = 0;
     let shakeY = 0;
     if (this.shakeTimer > 0) {
       this.shakeTimer = Math.max(0, this.shakeTimer - dt);
       const t = this.shakeTimer / this.shakeDuration;
-      const amp = 0.045 * t;
+      const amp = 0.048 * t;
       shakeX = Math.sin(this.clockSec * 68) * amp;
       shakeY = Math.cos(this.clockSec * 54) * amp * 0.7;
     }
@@ -343,6 +498,6 @@ export class FirstPersonController {
     this.camera.rotation.order = 'YXZ';
     this.camera.rotation.y = this.yaw;
     this.camera.rotation.x = this.pitch;
-    this.camera.rotation.z = shakeX * 0.4;
+    this.camera.rotation.z = shakeX * 0.42;
   }
 }

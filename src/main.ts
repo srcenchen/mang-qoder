@@ -1,6 +1,6 @@
 import './style.css';
 import * as THREE from 'three';
-import { createInitialColliders, WAYPOINTS } from './level/levelData';
+import { createInitialColliders } from './level/levelData';
 import { buildGameScene } from './level/buildScene';
 import { EchoShaderManager } from './shaders/echoMaterial';
 import { FirstPersonController } from './player/controller';
@@ -9,6 +9,11 @@ import { SpatialSoundEngine } from './audio/soundEngine';
 import { AccessibilityUI } from './ui/accessibilityUI';
 import { StoryScriptManager } from './story/scriptManager';
 import { generateEmpathySharePoster, PlaythroughStats } from './ui/shareCard';
+import { detectDefaultQuality, QUALITY_PROFILES, QualityName } from './render/quality';
+import { SkyEnvironmentSystem } from './render/skyEnvironment';
+import { PlanarReflectionPass } from './render/planarReflection';
+import { RainWeatherSystem } from './render/weather';
+import { CinemaPostPipeline } from './render/postPipeline';
 
 class BlindPathGameApp {
   private renderer: THREE.WebGLRenderer;
@@ -16,10 +21,16 @@ class BlindPathGameApp {
   private camera: THREE.PerspectiveCamera;
   private fog: THREE.FogExp2;
 
-  private darkBgColor = new THREE.Color('#040507');
-  private sunsetBgColor = new THREE.Color('#2b170e');
-  private sunsetFogColor = new THREE.Color('#8a4b24');
-  private peekBgColor = new THREE.Color('#131b29');
+  private darkFogColor = new THREE.Color('#000000');
+  private sunsetFogColor = new THREE.Color('#8c4c24');
+  private peekFogColor = new THREE.Color('#1a2433');
+  private attractFogColor = new THREE.Color('#0c121b');
+
+  private qualityName: QualityName = detectDefaultQuality();
+  private skyEnv: SkyEnvironmentSystem;
+  private planarRefl: PlanarReflectionPass;
+  private weather: RainWeatherSystem;
+  private postPipeline: CinemaPostPipeline;
 
   private echoManager: EchoShaderManager;
   private soundEngine: SpatialSoundEngine;
@@ -34,25 +45,47 @@ class BlindPathGameApp {
   private started = false;
   private clock = new THREE.Clock();
   private totalElapsed = 0;
-  private latestStats: PlaythroughStats = { elapsedSeconds: 0, caneTaps: 0, obstacleBumps: 0 };
+
+  // Attract Mode & Cinema Transition States
+  private attractReveal = 0.72;
+  private attractWaveTimer = 1.2;
+  private attractCarTimer = 2.4;
+  private impactPulse = 0;
+  private screenFade = 1.0;
+
+  private latestStats: PlaythroughStats = {
+    elapsedSeconds: 0,
+    caneTaps: 0,
+    obstacleBumps: 0,
+    memoriesFound: 0,
+    memoriesTotal: 3,
+  };
 
   // UI Elements
-  private hudHeader = document.getElementById('hud-header')!;
-  private hudHint = document.getElementById('hud-controls-hint')!;
-  private touchControls = document.getElementById('touch-controls')!;
-  private startScreen = document.getElementById('start-screen')!;
+  private stageRoot = document.getElementById('stage-root')!;
+  private bootScreen = document.getElementById('boot')!;
+  private bootFill = document.getElementById('boot-fill')!;
+  private cinemaBars = document.getElementById('cinema-bars')!;
+  private titleScreen = document.getElementById('title-screen')!;
+  private hudRoot = document.getElementById('hud-root')!;
   private btnStart = document.getElementById('btn-start')!;
   private btnPeek = document.getElementById('btn-peek')!;
   private peekDot = document.getElementById('peek-dot')!;
   private btnMute = document.getElementById('btn-mute')!;
   private iconSound = document.getElementById('icon-sound')!;
   private btnCaneTap = document.getElementById('btn-cane-tap') as HTMLButtonElement;
+  private btnListen = document.getElementById('btn-listen') as HTMLButtonElement;
+
+  private autoLandscapeEnabled = true;
+  private stageW = window.innerWidth;
+  private stageH = window.innerHeight;
 
   // Ending & Share Card Elements
   private endingModal = document.getElementById('ending-modal')!;
   private statTime = document.getElementById('stat-time')!;
   private statTaps = document.getElementById('stat-taps')!;
   private statBumps = document.getElementById('stat-bumps')!;
+  private statMemories = document.getElementById('stat-memories')!;
   private posterWrap = document.getElementById('poster-preview-wrap')!;
   private posterImg = document.getElementById('poster-img') as HTMLImageElement;
   private btnDownloadPoster = document.getElementById('btn-download-poster') as HTMLAnchorElement;
@@ -62,74 +95,126 @@ class BlindPathGameApp {
   private btnReopenEnding = document.getElementById('btn-reopen-ending')!;
 
   constructor() {
+    this.bootFill.style.width = '28%';
     const container = document.getElementById('canvas-container')!;
+    const profile = QUALITY_PROFILES[this.qualityName];
 
     this.renderer = new THREE.WebGLRenderer({
-      antialias: true,
+      antialias: false, // Handled cleanly by our FXAA post-pass!
       powerPreference: 'high-performance',
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, profile.maxDpr));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.08;
+    this.renderer.shadowMap.enabled = profile.shadows;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Tone mapping & sRGB encoding are handled inside our CinemaPostPipeline (ACES/AgX hybrid!)
+    this.renderer.toneMapping = THREE.NoToneMapping;
     container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
-    this.scene.background = this.darkBgColor.clone();
-    this.fog = new THREE.FogExp2('#040507', 0.08);
+    this.fog = new THREE.FogExp2('#0c121b', 0.042);
     this.scene.fog = this.fog;
 
     this.camera = new THREE.PerspectiveCamera(
-      62,
+      56,
       window.innerWidth / window.innerHeight,
       0.08,
-      90
+      95
     );
-    this.camera.position.set(
-      WAYPOINTS.playerStart.x,
-      WAYPOINTS.playerStart.y,
-      WAYPOINTS.playerStart.z
-    );
+    this.camera.position.set(0.65, 1.48, -9.6);
     this.scene.add(this.camera);
 
+    // 1. Procedural Sky Dome + PMREM IBL Baker
+    this.bootFill.style.width = '52%';
+    this.skyEnv = new SkyEnvironmentSystem(this.renderer, this.scene);
+
+    // 2. Planar Wet-Ground Reflection Pass & Rain Weather
+    this.planarRefl = new PlanarReflectionPass(512, 288);
+    this.planarRefl.enabled = profile.reflections;
+    this.planarRefl.resize(window.innerWidth, window.innerHeight, profile.reflScale);
+
+    this.weather = new RainWeatherSystem(this.scene, profile.rainCount, profile.splashCount);
+
+    // 3. Cinema Multi-Pass HDR Post-Processing Pipeline (SSAO + Bloom + Streak + ACES/AgX + FXAA + Grain)
+    this.postPipeline = new CinemaPostPipeline(this.renderer, profile);
+    const dpr = this.renderer.getPixelRatio();
+    this.postPipeline.resize(window.innerWidth * dpr, window.innerHeight * dpr);
+
+    this.bootFill.style.width = '78%';
+
+    // 4. Sonic Echo PBR Material Manager & Audio Engine
     this.echoManager = new EchoShaderManager();
+    this.echoManager.setAttractReveal(this.attractReveal);
     this.soundEngine = new SpatialSoundEngine();
 
-    this.a11yUI = new AccessibilityUI({
+    this.a11yUI = new AccessibilityUI(this.qualityName, {
       onHighContrastChange: (enabled) => {
         this.echoManager.setHighContrast(enabled);
       },
       onEchoDurationChange: (seconds) => {
         this.echoManager.setEchoDuration(seconds);
       },
+      onQualityChange: (q) => {
+        this.applyQuality(q);
+      },
+      onVolumeChange: (v) => {
+        this.soundEngine.setMasterVolume(v);
+      },
+      onSensitivityChange: (s) => {
+        this.controller.mouseSensitivity = s;
+      },
+      onAutoLandscapeChange: (enabled) => {
+        this.autoLandscapeEnabled = enabled;
+        this.syncStageLayout();
+      },
+      onDrawerToggle: (open) => {
+        this.controller.modalOpen = open;
+        if (open) {
+          this.controller.exitPointerLock();
+        }
+      },
     });
 
-    this.builtScene = buildGameScene(this.scene, this.echoManager, this.colliders);
+    // 5. Build Dense 45m Urban Street Canyon Scene
+    this.builtScene = buildGameScene(this.scene, this.camera, this.echoManager, this.colliders);
+    this.builtScene.setShadowsEnabled(profile.shadows, profile.shadowMapSize);
 
+    // 6. First-Person Guide Cane (Light Tap + Charged Heavy Wide-Range Echo)
     this.caneSystem = new GuideCaneSystem(
       this.camera,
       this.builtScene.raycastTargets,
       (hit) => {
-        const isWarm =
+        const palette =
           hit.tag === 'tactile_line' ||
           hit.tag === 'tactile_dot' ||
           hit.tag === 'cat' ||
-          hit.tag === 'stall';
+          hit.tag === 'stall'
+            ? 'amber'
+            : hit.tag === 'bike' || hit.tag === 'barrier'
+              ? 'cyan'
+              : 'cyan';
 
-        this.soundEngine.playCaneTap(hit.tag, hit.pan, hit.isManualTap);
+        this.soundEngine.playCaneTap(hit.tag, hit.pan, hit.isManualTap, hit.isHeavyEcho);
 
         if (hit.isManualTap) {
-          this.echoManager.emitWave(hit.point, isWarm, 5.2, 1.0);
-          this.builtScene.spawnSparkles(hit.point, isWarm);
+          const radius = hit.isHeavyEcho ? 10.8 : 5.5;
+          const durScale = hit.isHeavyEcho ? 1.38 : 1.0;
+          const intensity = hit.isHeavyEcho ? 1.35 : 1.05;
+          this.echoManager.emitWave(hit.point, palette, radius, durScale, intensity);
+          this.builtScene.spawnSparkles(hit.point, palette === 'amber');
+          if (hit.isHeavyEcho) {
+            // Subtle trailing harmonic ripple on charged heavy tap!
+            this.builtScene.spawnSparkles(hit.point, true);
+          }
         } else {
-          // Subtle sweep ripple when brushing onto tactile paving or obstacle
-          this.echoManager.emitWave(hit.point, isWarm, 2.4, 0.7);
+          this.echoManager.emitWave(hit.point, palette, 2.5, 0.72, 0.8);
         }
 
         this.story.onCaneSurfaceHit(hit.tag, hit.point);
       }
     );
 
+    // 7. Narrative Script Manager (6 Main Nodes + 3 Optional Micro-Interactions)
     this.story = new StoryScriptManager(
       this.colliders,
       this.builtScene,
@@ -144,16 +229,25 @@ class BlindPathGameApp {
         onCollidersUpdated: () => {
           this.builtScene.rebuildDebugWireframes(this.colliders);
         },
-        onReachEnding: (elapsedSeconds, obstacleBumps) => {
+        onImpactPulse: () => {
+          this.impactPulse = 1.0;
+        },
+        onEscortAssistChange: (active) => {
+          this.controller.escortAssistActive = active;
+        },
+        onReachEnding: (elapsedSeconds, obstacleBumps, memoriesFound, memoriesTotal) => {
           this.showEndingModal({
             elapsedSeconds,
             caneTaps: this.caneSystem.totalTaps,
             obstacleBumps,
+            memoriesFound,
+            memoriesTotal,
           });
         },
       }
     );
 
+    // 8. First-Person Controller (Attract Mode -> In-Game Exploration)
     this.controller = new FirstPersonController(
       this.camera,
       this.renderer.domElement,
@@ -175,70 +269,203 @@ class BlindPathGameApp {
         onAirwallBlocked: () => {
           this.story.onAirwallBlocked();
         },
-        onCanvasQuickTap: () => {
+        onPrimaryHoldStart: () => {
           if (this.caneSystem.equipped) {
-            this.caneSystem.triggerTap();
+            this.caneSystem.beginCharge();
           }
+        },
+        onPrimaryHoldEnd: () => {
+          if (this.caneSystem.equipped) {
+            this.caneSystem.releaseCharge();
+          }
+        },
+        onPointerLockChange: (locked) => {
+          this.a11yUI.setPointerLockVisual(locked, this.isMobileOrTouch(), this.started);
         },
       }
     );
 
+    this.syncStageLayout();
     this.bindUIEvents();
+
+    // Seed an opening golden sonic ripple on the wet tactile street for the Live 3D Title Screen!
+    this.echoManager.emitWave(new THREE.Vector3(0, 0.12, -13.2), 'amber', 6.8, 1.35, 1.15);
+
+    this.bootFill.style.width = '100%';
+    window.setTimeout(() => {
+      this.bootScreen.classList.add('done');
+    }, 320);
+
     this.animate();
   }
 
+  private isMobileOrTouch(): boolean {
+    const uaMobile = /Android|iPhone|iPad|iPod|MicroMessenger|Mobile/i.test(navigator.userAgent);
+    const coarse = window.matchMedia?.('(pointer: coarse)').matches;
+    const touchSmall = navigator.maxTouchPoints > 0 && Math.min(window.innerWidth, window.innerHeight) <= 900;
+    return uaMobile || coarse || touchSmall;
+  }
+
+  /**
+   * Mobile Auto-Landscape:
+   * 1. On Android/PWA browsers, attempts hardware Fullscreen + screen.orientation.lock('landscape').
+   * 2. On iOS Safari / WeChat WebView (where OS blocks lock API), seamlessly applies CSS 90deg
+   *    cinema landscape rotation (.force-landscape) and remaps WebGL aspect + touch coordinates!
+   */
+  private tryNativeLandscapeLock(): void {
+    if (!this.isMobileOrTouch() || !this.autoLandscapeEnabled) return;
+    try {
+      const el = document.documentElement as HTMLElement & {
+        webkitRequestFullscreen?: () => Promise<void>;
+      };
+      const fsPromise = el.requestFullscreen?.() || el.webkitRequestFullscreen?.();
+      const lockOrientation = () => {
+        const orient = screen.orientation as ScreenOrientation & {
+          lock?: (mode: string) => Promise<void>;
+        };
+        orient?.lock?.('landscape')?.catch(() => {});
+      };
+      if (fsPromise && typeof fsPromise.then === 'function') {
+        fsPromise.then(lockOrientation).catch(lockOrientation);
+      } else {
+        lockOrientation();
+      }
+    } catch {
+      // Fallback CSS auto-landscape handles portrait seamlessly
+    }
+  }
+
+  private syncStageLayout(): void {
+    const winW = window.innerWidth;
+    const winH = window.innerHeight;
+    const isPortrait = winH > winW;
+    const shouldRotate = this.autoLandscapeEnabled && this.isMobileOrTouch() && isPortrait;
+
+    this.stageRoot.classList.toggle('force-landscape', shouldRotate);
+    this.controller?.setCssRotatedLandscape(shouldRotate);
+
+    // Logical stage dimensions in landscape space
+    this.stageW = shouldRotate ? winH : winW;
+    this.stageH = shouldRotate ? winW : winH;
+
+    const p = QUALITY_PROFILES[this.qualityName];
+    this.camera.aspect = this.stageW / Math.max(1, this.stageH);
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(this.stageW, this.stageH, false);
+    this.renderer.domElement.style.width = '100%';
+    this.renderer.domElement.style.height = '100%';
+
+    const dpr = this.renderer.getPixelRatio();
+    this.postPipeline.resize(this.stageW * dpr, this.stageH * dpr);
+    this.planarRefl.resize(this.stageW, this.stageH, p.reflScale);
+  }
+
+  private applyQuality(name: QualityName): void {
+    this.qualityName = name;
+    const p = QUALITY_PROFILES[name];
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, p.maxDpr));
+    this.renderer.shadowMap.enabled = p.shadows;
+    this.builtScene.setShadowsEnabled(p.shadows, p.shadowMapSize);
+    this.planarRefl.enabled = p.reflections;
+    this.weather.rebuild(p.rainCount, p.splashCount);
+    this.postPipeline.setQuality(p);
+    this.syncStageLayout();
+  }
+
   private bindUIEvents(): void {
-    // Synchronous Web Audio Unlock on Start Click (WeChat & iOS Safari compatible!)
+    // Synchronous Web Audio Unlock + Pointer Lock (Desktop) / Auto-Landscape (Mobile)!
     this.btnStart.addEventListener('click', () => {
       this.soundEngine.unlockAndInit();
       this.started = true;
+
+      this.titleScreen.classList.remove('open');
+      this.cinemaBars.classList.remove('open');
+      this.screenFade = 0.85;
+
+      this.controller.attractMode = false;
+      this.controller.reset();
       this.controller.enabled = true;
+      this.camera.fov = 62;
+      this.camera.updateProjectionMatrix();
 
-      this.startScreen.classList.add('opacity-0', 'pointer-events-none');
-      window.setTimeout(() => {
-        this.startScreen.classList.add('hidden');
-      }, 680);
+      this.echoManager.reset();
+      this.attractReveal = 0.0;
+      this.echoManager.setAttractReveal(0.0);
 
-      this.hudHeader.classList.remove('opacity-0');
-      this.hudHint.classList.remove('opacity-0');
-      this.touchControls.classList.remove('opacity-0');
+      this.hudRoot.classList.add('on');
+      this.hudRoot.setAttribute('aria-hidden', 'false');
+
+      if (this.isMobileOrTouch()) {
+        this.tryNativeLandscapeLock();
+        this.syncStageLayout();
+      } else {
+        // Capture mouse pointer immediately inside user click gesture!
+        this.controller.requestPointerLock();
+        this.a11yUI.setPointerLockVisual(this.controller.isPointerLocked, false, true);
+      }
 
       this.story.startJourney();
     });
 
-    // Cane Tap Button (Bottom-Right)
+    // Cane Tap Button (supports both Quick Tap AND Hold-to-Charge Heavy Echo!)
     this.btnCaneTap.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       e.preventDefault();
-      this.caneSystem.triggerTap();
+      this.caneSystem.beginCharge();
+    });
+    const endCaneHold = (e: PointerEvent) => {
+      e.stopPropagation();
+      this.caneSystem.releaseCharge();
+    };
+    this.btnCaneTap.addEventListener('pointerup', endCaneHold);
+    this.btnCaneTap.addEventListener('pointercancel', endCaneHold);
+    this.btnCaneTap.addEventListener('pointerleave', () => {
+      if (this.caneSystem.chargeProgress > 0) this.caneSystem.releaseCharge();
     });
 
-    // Peek Debug Mode Switch (Top-Right)
-    this.btnPeek.addEventListener('click', () => {
-      this.togglePeekMode();
+    // Focus Listen Hold Button (Mobile & Desktop)
+    this.btnListen.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      this.controller.setTouchListening(true);
+      this.btnListen.classList.add('active');
     });
+    const endListen = (e: PointerEvent) => {
+      e.stopPropagation();
+      this.controller.setTouchListening(false);
+      this.btnListen.classList.remove('active');
+    };
+    this.btnListen.addEventListener('pointerup', endListen);
+    this.btnListen.addEventListener('pointercancel', endListen);
+    this.btnListen.addEventListener('pointerleave', endListen);
 
-    // Mute Toggle (Top-Right)
-    this.btnMute.addEventListener('click', () => {
-      this.toggleMute();
-    });
+    this.btnPeek.addEventListener('click', () => this.togglePeekMode());
+    this.btnMute.addEventListener('click', () => this.toggleMute());
 
     // Global Keyboard Shortcuts
     window.addEventListener('keydown', (e) => {
       if (!this.started) return;
       if (e.code === 'Space') {
         e.preventDefault();
-        this.caneSystem.triggerTap();
-      } else if (e.code === 'KeyP') {
+        if (!e.repeat) this.caneSystem.beginCharge();
+      } else if (e.code === 'KeyP' && !e.repeat) {
         this.togglePeekMode();
-      } else if (e.code === 'KeyM') {
+      } else if (e.code === 'KeyM' && !e.repeat) {
         this.toggleMute();
-      } else if (e.code === 'KeyE') {
-        this.story.handleHelpPress();
+      } else if (e.code === 'KeyE' && !e.repeat) {
+        this.story.handleContextAction();
       }
     });
 
-    // Share Card Generation & Ending Modal Actions
+    window.addEventListener('keyup', (e) => {
+      if (!this.started) return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        this.caneSystem.releaseCharge();
+      }
+    });
+
+    // Ending Modal & 9:16 Share Poster
     this.btnGeneratePoster.addEventListener('click', () => {
       const dataUrl = generateEmpathySharePoster(this.latestStats);
       this.posterImg.src = dataUrl;
@@ -251,26 +478,27 @@ class BlindPathGameApp {
 
     this.btnAdmireSunset.addEventListener('click', () => {
       this.endingModal.classList.add('hidden');
-      this.endingModal.classList.remove('flex');
       this.btnReopenEnding.classList.remove('hidden');
+      this.controller.modalOpen = false;
       this.controller.enabled = true;
+      if (!this.isMobileOrTouch()) {
+        this.controller.requestPointerLock();
+      }
     });
 
     this.btnReopenEnding.addEventListener('click', () => {
       this.btnReopenEnding.classList.add('hidden');
       this.endingModal.classList.remove('hidden');
-      this.endingModal.classList.add('flex');
+      this.controller.modalOpen = true;
+      this.controller.exitPointerLock();
     });
 
-    this.btnRestart.addEventListener('click', () => {
-      this.restartExperience();
-    });
+    this.btnRestart.addEventListener('click', () => this.restartExperience());
 
-    // Responsive Resize
-    window.addEventListener('resize', () => {
-      this.camera.aspect = window.innerWidth / window.innerHeight;
-      this.camera.updateProjectionMatrix();
-      this.renderer.setSize(window.innerWidth, window.innerHeight);
+    const handleResize = () => this.syncStageLayout();
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', () => {
+      window.setTimeout(handleResize, 120);
     });
   }
 
@@ -280,10 +508,7 @@ class BlindPathGameApp {
     this.builtScene.debugWireframeGroup.visible = this.debugPeek;
 
     this.btnPeek.setAttribute('aria-pressed', String(this.debugPeek));
-    this.peekDot.className = this.debugPeek
-      ? 'w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399] transition-colors'
-      : 'w-2 h-2 rounded-full bg-slate-500 transition-colors';
-
+    this.peekDot.classList.toggle('active', this.debugPeek);
     this.a11yUI.speak(this.debugPeek ? '透视调试模式已开启' : '已切回沉浸盲行模式');
   }
 
@@ -299,51 +524,80 @@ class BlindPathGameApp {
     this.statTime.textContent = `${stats.elapsedSeconds}s`;
     this.statTaps.textContent = `${stats.caneTaps}`;
     this.statBumps.textContent = `${stats.obstacleBumps}`;
+    this.statMemories.textContent = `${stats.memoriesFound}/${stats.memoriesTotal}`;
 
     this.posterWrap.classList.add('hidden');
     this.posterWrap.classList.remove('flex');
     this.btnGeneratePoster.textContent = '✦ 生成公益共情海报';
-
     this.endingModal.classList.remove('hidden');
-    this.endingModal.classList.add('flex');
+    this.controller.modalOpen = true;
+    this.controller.exitPointerLock();
 
     this.a11yUI.speak(
-      `体验完成。本次耗时 ${stats.elapsedSeconds} 秒，盲杖探路 ${stats.caneTaps} 次，遭遇碰壁 ${stats.obstacleBumps} 次。`
+      `体验完成。本次耗时 ${stats.elapsedSeconds} 秒，盲杖探路 ${stats.caneTaps} 次，遭遇碰壁 ${stats.obstacleBumps} 次，收集城市微光 ${stats.memoriesFound} 处。`
     );
   }
 
   private restartExperience(): void {
     this.endingModal.classList.add('hidden');
-    this.endingModal.classList.remove('flex');
     this.btnReopenEnding.classList.add('hidden');
 
     this.btnCaneTap.disabled = true;
     this.echoManager.reset();
+    this.echoManager.setAttractReveal(0);
     this.caneSystem.reset();
     this.controller.reset();
     this.story.reset();
 
-    if (this.debugPeek) {
-      this.togglePeekMode();
-    }
-
+    if (this.debugPeek) this.togglePeekMode();
+    this.controller.modalOpen = false;
     this.controller.enabled = true;
+    this.screenFade = 0.7;
+    if (!this.isMobileOrTouch()) {
+      this.controller.requestPointerLock();
+    }
     this.story.startJourney();
   }
 
-  private updateAtmosphere(): void {
+  private updateAtmosphere(dt: number): void {
+    // Smooth fade-in after boot or transition
+    if (this.screenFade > 0) {
+      this.screenFade = Math.max(0, this.screenFade - dt * 1.65);
+    }
+    if (this.impactPulse > 0) {
+      this.impactPulse = Math.max(0, this.impactPulse - dt * 2.4);
+    }
+
+    // Live 3D Title Attract-Mode Showcase Waves & Background Traffic!
+    if (!this.started) {
+      this.attractWaveTimer -= dt;
+      if (this.attractWaveTimer <= 0) {
+        this.attractWaveTimer = 2.6;
+        const z = -12.6 - Math.random() * 5.0;
+        const warm = Math.random() > 0.35;
+        this.echoManager.emitWave(new THREE.Vector3(0, 0.12, z), warm ? 'amber' : 'cyan', 6.4, 1.25, 1.15);
+        this.builtScene.spawnSparkles(new THREE.Vector3(0, 0.14, z), warm);
+      }
+      this.attractCarTimer -= dt;
+      if (this.attractCarTimer <= 0) {
+        this.attractCarTimer = 3.2;
+        this.story.spawnTrafficBurst(Math.random() > 0.5 ? 1 : -1, 0);
+      }
+      this.fog.color.copy(this.attractFogColor);
+      this.fog.density = 0.036;
+      return;
+    }
+
     if (this.debugPeek) {
-      (this.scene.background as THREE.Color).copy(this.peekBgColor);
-      this.fog.color.copy(this.peekBgColor);
-      this.fog.density = 0.012;
+      this.fog.color.copy(this.peekFogColor);
+      this.fog.density = 0.011;
       return;
     }
 
     const s = this.story.sunsetProgress;
     const ease = s * s * (3 - 2 * s);
-    (this.scene.background as THREE.Color).lerpColors(this.darkBgColor, this.sunsetBgColor, ease);
-    this.fog.color.lerpColors(this.darkBgColor, this.sunsetFogColor, ease);
-    this.fog.density = THREE.MathUtils.lerp(0.08, 0.016, ease);
+    this.fog.color.lerpColors(this.darkFogColor, this.sunsetFogColor, ease);
+    this.fog.density = THREE.MathUtils.lerp(0.115, 0.014, ease);
   }
 
   private animate = (): void => {
@@ -354,30 +608,94 @@ class BlindPathGameApp {
 
     this.controller.update(dt);
 
+    const isOutdoors = !this.started || this.controller.position.z < -5.5;
     const caneState = this.caneSystem.update(
       dt,
       this.controller.sweepInput,
       this.controller.isMoving,
-      this.controller.walkCycle
+      this.controller.walkCycle,
+      isOutdoors
     );
     this.echoManager.setCaneTip(caneState.tipPos, this.caneSystem.equipped);
-    this.echoManager.update(dt);
+    this.echoManager.update(dt, this.totalElapsed);
+    this.a11yUI.setChargeProgress(this.caneSystem.chargeProgress);
 
-    this.story.update(dt, this.totalElapsed, this.controller.position);
+    this.story.update(
+      dt,
+      this.totalElapsed,
+      this.controller.position,
+      this.controller.isListening,
+      this.camera
+    );
 
+    if (this.started) {
+      this.a11yUI.updateCompass(
+        this.controller.position,
+        this.controller.yaw,
+        this.story.beacons,
+        this.controller.isListening
+      );
+      this.btnListen.classList.toggle('active', this.controller.isListening);
+    }
+
+    const sunsetVisual = !this.started ? 0.24 : this.story.sunsetProgress;
+    const worldVis = !this.started ? 1.0 : this.debugPeek ? 1.0 : this.story.sunsetProgress;
     const doorTargetAngle = this.story.doorOpened ? 1.42 : 0.14;
-    this.builtScene.updateParticlesAndProps(dt, this.totalElapsed, doorTargetAngle);
+    this.builtScene.updateParticlesAndProps(
+      dt,
+      this.totalElapsed,
+      doorTargetAngle,
+      sunsetVisual,
+      worldVis
+    );
+    this.skyEnv.update(
+      this.totalElapsed,
+      sunsetVisual,
+      this.debugPeek || !this.started,
+      this.camera.position,
+      this.scene
+    );
+    this.weather.update(this.totalElapsed, this.camera.position, sunsetVisual, worldVis);
 
     this.soundEngine.update(
       dt,
       this.controller.position,
       this.controller.yaw,
       this.story.doorOpened,
-      this.story.strangerArrived
+      this.story.strangerArrived,
+      this.controller.listenBlend
     );
 
-    this.updateAtmosphere();
-    this.renderer.render(this.scene, this.camera);
+    this.updateAtmosphere(dt);
+
+    // 1. Real-time Planar Wet-Ground Reflection Pass (when outdoors & enabled in Quality)
+    const shouldReflect =
+      this.planarRefl.enabled && (this.controller.attractMode || this.controller.position.z < -4.2);
+    if (shouldReflect) {
+      this.planarRefl.render(this.renderer, this.scene, this.camera, [
+        ...this.builtScene.reflectiveGroundMeshes,
+        this.caneSystem.handRoot,
+        this.builtScene.escortRig.playerLeftArmRoot,
+      ]);
+      this.echoManager.setPlanarReflection(
+        this.planarRefl.renderTarget.texture,
+        this.planarRefl.textureMatrix,
+        true
+      );
+    } else {
+      this.echoManager.setPlanarReflection(null, this.planarRefl.textureMatrix, false);
+    }
+
+    // 2. Cinema Multi-Pass HDR Post-Processing Render -> Screen!
+    this.postPipeline.render(this.scene, this.camera, {
+      elapsed: this.totalElapsed,
+      sunsetFactor: sunsetVisual,
+      peekMode: this.debugPeek,
+      impactPulse: this.impactPulse,
+      listenBlend: this.controller.listenBlend,
+      fadeAmount: this.screenFade,
+      sunDir: this.skyEnv.sunDirection,
+    });
   };
 }
 
