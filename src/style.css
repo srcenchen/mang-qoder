@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+@layer base {
+  html,
+  body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: #040507;
+    font-family:
+      -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+      "Noto Sans CJK SC", sans-serif;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* High Contrast Accessibility Mode Overrides */
+body.high-contrast #subtitle-box {
+  background-color: rgba(0, 0, 0, 0.94);
+  border: 2px solid #fbbf24;
+  padding: 0.95rem 1.4rem;
+}
+
+body.high-contrast #subtitle-text {
+  font-size: 1.18rem;
+  font-weight: 600;
+  color: #fef08a;
+  line-height: 1.65;
+}
+
+body.high-contrast .hud-pill,
+body.high-contrast #act-banner {
+  background-color: rgba(0, 0, 0, 0.92);
+  border-color: rgba(251, 191, 36, 0.85);
+  color: #ffffff;
+}
+
+body.high-contrast #btn-cane-tap {
+  border-color: #38bdf8;
+  background-color: rgba(2, 6, 23, 0.95);
+  box-shadow: 0 0 32px rgba(56, 189, 248, 0.65);
+}
+
+/* Allow long-press save on generated share card image */
+#poster-img {
+  -webkit-touch-callout: default;
+  user-select: auto;
+}

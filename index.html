@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#040507" />
+    <title>听见 · 盲道行 3D | ⠞⠊⠝⠛ ⠚⠊⠁⠝</title>
+  </head>
+  <body class="bg-[#040507] text-slate-100 overflow-hidden select-none touch-none antialiased">
+    <!-- 3D WebGL Canvas Container -->
+    <div id="canvas-container" class="fixed inset-0 z-0"></div>
+
+    <!-- Top HUD Bar (Braille + Chinese Act Header & Quick Controls) -->
+    <header
+      id="hud-header"
+      class="fixed top-0 inset-x-0 z-20 flex items-start justify-between gap-2 px-3 sm:px-6 pt-3 sm:pt-4 pointer-events-none transition-opacity duration-500 opacity-0"
+    >
+      <!-- Act & Braille Indicator -->
+      <div
+        id="act-banner"
+        class="pointer-events-auto max-w-[52vw] sm:max-w-none rounded-xl bg-black/65 backdrop-blur-md border border-white/10 px-3 sm:px-3.5 py-1.5 sm:py-2 shadow-lg overflow-hidden"
+      >
+        <div
+          id="act-braille"
+          class="text-[10px] sm:text-xs tracking-[0.12em] sm:tracking-[0.22em] text-amber-400/90 font-mono leading-tight truncate"
+          aria-hidden="true"
+        >
+          ⠁⠉⠞ ⠼⠁ · ⠋⠕⠽⠑⠗
+        </div>
+        <div id="act-title" class="text-[11px] sm:text-sm font-medium text-slate-100 tracking-wide sm:tracking-wider mt-0.5 truncate">
+          第一幕 · 暗室与盲道
+        </div>
+      </div>
+
+      <!-- Right Action Controls: Peek Mode, Accessibility Settings, Audio Mute -->
+      <div class="pointer-events-auto flex items-center gap-1.5 sm:gap-2 shrink-0">
+        <button
+          id="btn-peek"
+          type="button"
+          aria-pressed="false"
+          title="切换透视调试模式 (快捷键 P)"
+          class="hud-pill whitespace-nowrap shrink-0 flex items-center gap-1.5 rounded-xl bg-black/65 hover:bg-slate-900/90 active:scale-95 backdrop-blur-md border border-white/15 px-2.5 sm:px-3.5 py-2 text-xs sm:text-sm text-slate-200 transition cursor-pointer"
+        >
+          <span id="peek-dot" class="w-2 h-2 rounded-full bg-slate-500 transition-colors shrink-0"></span>
+          <span class="sm:hidden">透视</span>
+          <span class="hidden sm:inline">透视模式</span>
+          <span class="hidden md:inline text-[10px] text-slate-400 font-mono">[P]</span>
+        </button>
+
+        <button
+          id="btn-a11y"
+          type="button"
+          title="无障碍设置"
+          class="hud-pill whitespace-nowrap shrink-0 flex items-center gap-1 sm:gap-1.5 rounded-xl bg-black/65 hover:bg-slate-900/90 active:scale-95 backdrop-blur-md border border-white/15 px-2.5 sm:px-3.5 py-2 text-xs sm:text-sm text-slate-200 transition cursor-pointer"
+        >
+          <span class="text-amber-400 font-mono text-xs" aria-hidden="true">⠿</span>
+          <span>无障碍</span>
+        </button>
+
+        <button
+          id="btn-mute"
+          type="button"
+          aria-pressed="false"
+          title="静音开关 (快捷键 M)"
+          class="hud-pill shrink-0 flex items-center justify-center rounded-xl bg-black/65 hover:bg-slate-900/90 active:scale-95 backdrop-blur-md border border-white/15 w-9 h-9 sm:w-10 sm:h-10 text-slate-200 transition cursor-pointer"
+        >
+          <span id="icon-sound" class="text-sm">🔊</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Subtle Distance Progress & Control Hint (Desktop) -->
+    <div
+      id="hud-controls-hint"
+      class="hidden md:flex fixed top-18 left-6 z-10 items-center gap-3 text-[11px] text-slate-400/80 pointer-events-none opacity-0 transition-opacity duration-500"
+    >
+      <span>WASD / 方向键 移动</span>
+      <span>·</span>
+      <span>鼠标拖动 / Q E 转头</span>
+      <span>·</span>
+      <span>空格键 敲杖探路</span>
+    </div>
+
+    <!-- Center Contextual Action Button: Call For Help at Crosswalk (Node 05) -->
+    <div
+      id="help-action-wrap"
+      class="fixed inset-x-0 bottom-38 sm:bottom-36 z-20 flex justify-center pointer-events-none hidden"
+    >
+      <button
+        id="btn-help"
+        type="button"
+        class="pointer-events-auto group relative flex flex-col items-center rounded-2xl bg-amber-500/20 hover:bg-amber-500/30 active:scale-95 backdrop-blur-md border-2 border-amber-400 px-6 py-3 shadow-[0_0_30px_rgba(245,158,11,0.45)] transition cursor-pointer animate-pulse"
+      >
+        <span class="text-[11px] tracking-[0.25em] text-amber-300 font-mono" aria-hidden="true">
+          ⠠⠓⠑⠇⠏ · ⠟⠊⠥ 助
+        </span>
+        <span id="btn-help-label" class="text-base sm:text-lg font-semibold text-amber-100 tracking-widest mt-0.5">
+          呼喊求助 [E]
+        </span>
+      </button>
+    </div>
+
+    <!-- Cinematic Subtitle Box -->
+    <div
+      id="subtitle-wrap"
+      aria-live="polite"
+      class="fixed inset-x-4 bottom-24 sm:bottom-10 z-20 flex justify-center pointer-events-none transition-all duration-500 opacity-0 translate-y-2"
+    >
+      <div
+        id="subtitle-box"
+        class="max-w-xl rounded-2xl bg-black/75 backdrop-blur-md border border-white/12 px-5 py-3 text-center shadow-2xl"
+      >
+        <p id="subtitle-text" class="text-sm sm:text-base text-slate-100 leading-relaxed tracking-wide"></p>
+      </div>
+    </div>
+
+    <!-- Interactive Touch Controls: Left Virtual Joystick & Right Cane Tap Button -->
+    <div
+      id="touch-controls"
+      class="fixed inset-x-0 bottom-0 z-20 flex items-end justify-between px-5 pb-5 sm:px-8 sm:pb-7 pointer-events-none opacity-0 transition-opacity duration-500"
+    >
+      <!-- Bottom-Left Virtual Joystick (Mobile & Tablet, or optional touch) -->
+      <div
+        id="joystick-zone"
+        class="pointer-events-auto relative w-28 h-28 sm:w-32 sm:h-32 rounded-full bg-white/[0.04] border border-white/15 backdrop-blur-sm flex items-center justify-center touch-none md:opacity-45 hover:opacity-100 transition-opacity"
+      >
+        <div class="text-[10px] text-white/25 tracking-widest pointer-events-none select-none">移动</div>
+        <div
+          id="joystick-knob"
+          class="absolute w-11 h-11 rounded-full bg-sky-400/30 border border-sky-300/60 shadow-[0_0_15px_rgba(56,189,248,0.35)] pointer-events-none transition-transform duration-75"
+        ></div>
+      </div>
+
+      <!-- Bottom-Right Cane Sweep/Tap Button -->
+      <button
+        id="btn-cane-tap"
+        type="button"
+        disabled
+        class="pointer-events-auto relative w-22 h-22 sm:w-24 sm:h-24 rounded-full bg-slate-900/80 border-2 border-sky-400/60 shadow-[0_0_24px_rgba(56,189,248,0.28)] backdrop-blur-md flex flex-col items-center justify-center active:scale-92 transition disabled:opacity-0 disabled:pointer-events-none cursor-pointer"
+      >
+        <span class="text-[10px] font-mono tracking-widest text-sky-300/90" aria-hidden="true">⠞⠁⠏</span>
+        <span class="text-xs sm:text-sm font-semibold text-slate-100 tracking-wider mt-0.5">敲杖探路</span>
+        <span class="hidden sm:inline text-[10px] text-slate-400 mt-0.5">[Space]</span>
+      </button>
+    </div>
+
+    <!-- Start Title Screen Overlay -->
+    <section
+      id="start-screen"
+      class="fixed inset-0 z-40 flex flex-col items-center justify-center px-5 bg-radial from-[#0c121e]/92 via-[#05070b]/96 to-[#030406] backdrop-blur-md transition-opacity duration-700"
+    >
+      <div class="max-w-lg w-full text-center space-y-6">
+        <!-- Decorative Sonic Rings Header -->
+        <div class="relative mx-auto w-20 h-20 flex items-center justify-center">
+          <span class="absolute inset-0 rounded-full border border-sky-400/35 animate-ping"></span>
+          <span class="absolute inset-2 rounded-full border border-amber-400/50"></span>
+          <span class="text-2xl text-amber-300 font-mono" aria-hidden="true">⠿</span>
+        </div>
+
+        <!-- Dual-line Braille + Chinese Title -->
+        <div class="space-y-2">
+          <p
+            class="text-xs sm:text-sm font-mono tracking-[0.32em] text-amber-400/90 select-all"
+            aria-label="盲文点字：听见 盲道行"
+          >
+            ⠞⠊⠝⠛ ⠚⠊⠁⠝ · ⠍⠁⠝⠛ ⠙⠁⠕ ⠭⠊⠝⠛
+          </p>
+          <h1 class="text-3xl sm:text-5xl font-bold tracking-[0.14em] text-white">
+            听见 · 盲道行
+          </h1>
+          <p class="text-xs sm:text-sm text-sky-300/80 tracking-[0.2em] pt-1">
+            第一人称视障出行声波共情体验 · 3D
+          </p>
+        </div>
+
+        <!-- Intro Copy -->
+        <p class="text-xs sm:text-sm text-slate-300/85 leading-relaxed max-w-md mx-auto">
+          闭上眼睛，世界并未消失，只是换了一种被感知的形状。<br />
+          手握导盲杖，在声波与回响绘出的微光里，走过短短 45 米的城市街角。
+        </p>
+
+        <!-- Headphone Recommendation Pill -->
+        <div
+          class="inline-flex items-center gap-2 rounded-full bg-white/[0.05] border border-white/10 px-4 py-1.5 text-xs text-slate-300"
+        >
+          <span>🎧</span>
+          <span>佩戴耳机体验双耳立体车流与盲杖触感回响效果最佳</span>
+        </div>
+
+        <!-- Start Button -->
+        <div class="pt-2 flex flex-col items-center gap-3">
+          <button
+            id="btn-start"
+            type="button"
+            class="group relative w-full max-w-xs rounded-2xl bg-gradient-to-r from-amber-500/90 via-amber-400 to-sky-400/90 p-[1.5px] shadow-[0_0_35px_rgba(245,158,11,0.3)] hover:shadow-[0_0_45px_rgba(56,189,248,0.45)] active:scale-98 transition cursor-pointer"
+          >
+            <div class="rounded-[14px] bg-[#080b12]/90 group-hover:bg-[#080b12]/75 px-8 py-3.5 transition">
+              <div class="text-[10px] font-mono tracking-[0.3em] text-amber-300/90" aria-hidden="true">
+                ⠎⠞⠁⠗⠞ ⠚⠕⠥⠗⠝⠑⠽
+              </div>
+              <div class="text-base sm:text-lg font-semibold tracking-[0.2em] text-white mt-0.5">
+                开始体验
+              </div>
+            </div>
+          </button>
+
+          <button
+            id="btn-start-a11y"
+            type="button"
+            class="text-xs text-slate-400 hover:text-amber-300 underline underline-offset-4 transition cursor-pointer py-1"
+          >
+            ⠿ 无障碍辅助设置（高对比度 / 声波时长 / 语音朗读）
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Accessibility Settings Modal -->
+    <div
+      id="a11y-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="a11y-modal-title"
+      class="fixed inset-0 z-50 hidden items-center justify-center bg-black/75 backdrop-blur-md px-4"
+    >
+      <div class="w-full max-w-md rounded-2xl bg-[#0b101b] border border-white/15 p-5 sm:p-6 shadow-2xl space-y-5">
+        <div class="flex items-start justify-between border-b border-white/10 pb-3">
+          <div>
+            <div class="text-[11px] font-mono tracking-[0.24em] text-amber-400" aria-hidden="true">
+              ⠁⠉⠉⠑⠎⠎⠊⠃⠊⠇⠊⠞⠽
+            </div>
+            <h2 id="a11y-modal-title" class="text-lg font-semibold text-white tracking-wider mt-0.5">
+              无障碍辅助设置
+            </h2>
+          </div>
+          <button
+            id="btn-close-a11y"
+            type="button"
+            class="rounded-lg px-2.5 py-1 text-slate-400 hover:text-white hover:bg-white/10 transition cursor-pointer"
+          >
+            ✕
+          </button>
+        </div>
+
+        <!-- Option 1: High Contrast -->
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <div class="text-sm font-medium text-slate-100">高对比度模式</div>
+            <div class="text-xs text-slate-400 mt-0.5">提高声波光环亮度并放大底部字幕与边框</div>
+          </div>
+          <button
+            id="toggle-contrast"
+            type="button"
+            aria-pressed="false"
+            class="w-13 h-7 rounded-full bg-slate-700 p-1 transition-colors flex items-center cursor-pointer shrink-0"
+          >
+            <span class="toggle-dot w-5 h-5 rounded-full bg-white transition-transform"></span>
+          </button>
+        </div>
+
+        <!-- Option 2: Echo Persistence Duration -->
+        <div class="space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-sm font-medium text-slate-100">声波显色停留时长</span>
+            <span id="echo-duration-label" class="text-xs font-mono text-amber-300">2.5s（标准）</span>
+          </div>
+          <div class="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              data-echo-dur="1.5"
+              class="echo-dur-btn rounded-xl border border-white/15 bg-white/[0.04] py-2 text-xs font-medium text-slate-300 hover:bg-white/10 transition cursor-pointer"
+            >
+              1.5s · 挑战
+            </button>
+            <button
+              type="button"
+              data-echo-dur="2.5"
+              class="echo-dur-btn rounded-xl border border-amber-400 bg-amber-500/20 py-2 text-xs font-medium text-amber-200 transition cursor-pointer"
+            >
+              2.5s · 标准
+            </button>
+            <button
+              type="button"
+              data-echo-dur="4.0"
+              class="echo-dur-btn rounded-xl border border-white/15 bg-white/[0.04] py-2 text-xs font-medium text-slate-300 hover:bg-white/10 transition cursor-pointer"
+            >
+              4.0s · 从容
+            </button>
+          </div>
+        </div>
+
+        <!-- Option 3: Native SpeechSynthesis TTS -->
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <div class="text-sm font-medium text-slate-100">菜单与字幕语音朗读</div>
+            <div class="text-xs text-slate-400 mt-0.5">使用浏览器原生语音自动播报旁白与按钮状态</div>
+          </div>
+          <button
+            id="toggle-tts"
+            type="button"
+            aria-pressed="false"
+            class="w-13 h-7 rounded-full bg-slate-700 p-1 transition-colors flex items-center cursor-pointer shrink-0"
+          >
+            <span class="toggle-dot w-5 h-5 rounded-full bg-white transition-transform"></span>
+          </button>
+        </div>
+
+        <div class="pt-2 border-t border-white/10 flex justify-end">
+          <button
+            id="btn-done-a11y"
+            type="button"
+            class="rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-sm px-5 py-2 transition cursor-pointer"
+          >
+            完成并继续
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Finale Completion & Empathy Share Card Modal -->
+    <div
+      id="ending-modal"
+      role="dialog"
+      aria-modal="true"
+      class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-md px-4 py-6 overflow-y-auto"
+    >
+      <div class="w-full max-w-lg rounded-3xl bg-[#090d16]/95 border border-amber-400/30 p-5 sm:p-7 shadow-[0_0_60px_rgba(245,158,11,0.2)] space-y-5 my-auto">
+        <div class="text-center space-y-1.5">
+          <p class="text-[11px] font-mono tracking-[0.28em] text-amber-400" aria-hidden="true">
+            ⠚⠕⠥⠗⠝⠑⠽ ⠉⠕⠍⠏⠇⠑⠞⠑
+          </p>
+          <h2 class="text-2xl sm:text-3xl font-bold text-white tracking-wider">
+            穿过黑暗，善意被听见
+          </h2>
+          <p class="text-xs sm:text-sm text-slate-300/85">
+            这 45 米盲道上的每一次敲击与停顿，都是全国 1731 万视障者真实的日常。
+          </p>
+        </div>
+
+        <!-- Real-time Playthrough Metrics -->
+        <div class="grid grid-cols-3 gap-2.5 sm:gap-3">
+          <div class="rounded-2xl bg-white/[0.04] border border-white/10 p-3 text-center">
+            <div id="stat-time" class="text-xl sm:text-2xl font-bold text-amber-300 font-mono">0s</div>
+            <div class="text-[11px] text-slate-400 mt-1">总耗时（秒）</div>
+          </div>
+          <div class="rounded-2xl bg-white/[0.04] border border-white/10 p-3 text-center">
+            <div id="stat-taps" class="text-xl sm:text-2xl font-bold text-sky-300 font-mono">0</div>
+            <div class="text-[11px] text-slate-400 mt-1">盲杖探路次数</div>
+          </div>
+          <div class="rounded-2xl bg-white/[0.04] border border-white/10 p-3 text-center">
+            <div id="stat-bumps" class="text-xl sm:text-2xl font-bold text-rose-300 font-mono">0</div>
+            <div class="text-[11px] text-slate-400 mt-1">遭遇碰壁次数</div>
+          </div>
+        </div>
+
+        <!-- Generated Poster Preview Container (Hidden until clicked or auto-generated) -->
+        <div id="poster-preview-wrap" class="hidden flex-col items-center space-y-2 pt-1">
+          <div class="relative rounded-2xl overflow-hidden border border-amber-400/40 shadow-xl max-h-[34vh] sm:max-h-[45vh]">
+            <img
+              id="poster-img"
+              alt="城市无障碍共情分享海报"
+              class="max-h-[34vh] sm:max-h-[45vh] w-auto object-contain block select-auto"
+            />
+          </div>
+          <div class="flex flex-wrap items-center justify-center gap-2.5 text-xs text-slate-300">
+            <a
+              id="btn-download-poster"
+              download="听见盲道行-城市无障碍共情卡.png"
+              class="whitespace-nowrap shrink-0 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-semibold px-4 py-1.5 sm:py-2 transition cursor-pointer"
+            >
+              ⬇ 下载高清海报
+            </a>
+            <span class="text-[11px] sm:text-xs text-slate-400">手机/微信端可长按上方图片保存</span>
+          </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="flex flex-col sm:flex-row gap-2 sm:gap-2.5 pt-1">
+          <button
+            id="btn-generate-poster"
+            type="button"
+            class="flex-1 rounded-xl bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-semibold py-2.5 sm:py-3 px-4 text-sm tracking-wider shadow-lg transition cursor-pointer"
+          >
+            ✦ 生成公益共情海报
+          </button>
+          <div class="grid grid-cols-2 sm:flex gap-2 sm:gap-2.5">
+            <button
+              id="btn-admire-sunset"
+              type="button"
+              class="whitespace-nowrap rounded-xl bg-white/[0.07] hover:bg-white/12 border border-white/15 text-slate-200 py-2.5 sm:py-3 px-3.5 sm:px-4 text-xs sm:text-sm transition cursor-pointer"
+            >
+              回看夕阳街景
+            </button>
+            <button
+              id="btn-restart"
+              type="button"
+              class="whitespace-nowrap rounded-xl bg-white/[0.07] hover:bg-white/12 border border-white/15 text-slate-200 py-2.5 sm:py-3 px-3.5 sm:px-4 text-xs sm:text-sm transition cursor-pointer"
+            >
+              再次体验
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Floating button when admiring sunset after closing modal -->
+    <button
+      id="btn-reopen-ending"
+      type="button"
+      class="fixed bottom-8 left-1/2 -translate-x-1/2 z-30 hidden rounded-full bg-amber-500/90 hover:bg-amber-400 text-slate-950 font-semibold px-6 py-2.5 text-sm shadow-xl transition cursor-pointer"
+    >
+      查看共情分享卡
+    </button>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

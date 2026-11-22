@@ -1,0 +1,22 @@
+{
+  "name": "tingjian-mangdaoxing-3d",
+  "private": true,
+  "version": "1.0.0",
+  "description": "《听见·盲道行 3D》— 第一人称盲人视角城市无障碍共情体验小游戏",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.0",
+    "@types/three": "^0.170.0",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.2.0"
+  }
+}
