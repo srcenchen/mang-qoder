@@ -1661,12 +1661,19 @@ export function buildGameScene(
 
   const rebuildDebugWireframes = (cols: ColliderBox[]) => {
     while (debugWireframeGroup.children.length > 0) {
-      debugWireframeGroup.remove(debugWireframeGroup.children[0]);
+      const line = debugWireframeGroup.children[0] as THREE.LineSegments<
+        THREE.EdgesGeometry,
+        THREE.LineBasicMaterial
+      >;
+      debugWireframeGroup.remove(line);
+      line.geometry.dispose();
+      line.material.dispose();
     }
     for (const c of cols) {
       if (!c.enabled) continue;
       const boxGeo = new THREE.BoxGeometry(c.maxX - c.minX, c.height, c.maxZ - c.minZ);
       const edges = new THREE.EdgesGeometry(boxGeo);
+      boxGeo.dispose();
       const color = c.isObstacle
         ? '#f97316'
         : c.id === 'crosswalk_airwall'

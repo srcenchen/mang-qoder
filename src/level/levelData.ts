@@ -58,6 +58,8 @@ export interface LevelWaypoints {
   catPos: { x: number; y: number; z: number };
   signalPolePos: { x: number; y: number; z: number };
   crosswalkPromptZ: number;
+  crosswalkCurbZ: number;
+  crosswalkHalfWidth: number;
   pedestrianPos: { x: number; y: number; z: number };
   sunsetFinishZ: number;
 }
@@ -76,6 +78,8 @@ export const WAYPOINTS: LevelWaypoints = {
   catPos: { x: -0.92, y: 0.08, z: -24.6 },
   signalPolePos: { x: 1.55, y: 0.08, z: -31.75 },
   crosswalkPromptZ: -31.5,
+  crosswalkCurbZ: -32.18,
+  crosswalkHalfWidth: 1.8,
   pedestrianPos: { x: 0.0, y: 0.08, z: -43.2 },
   sunsetFinishZ: -43.0,
 };
@@ -418,7 +422,7 @@ export function createInitialColliders(): ColliderBox[] {
       minX: -4.6,
       maxX: 4.6,
       minZ: -33.4,
-      maxZ: -32.18,
+      maxZ: WAYPOINTS.crosswalkCurbZ,
       height: 1.8,
       tag: 'tactile_dot',
       enabled: true,

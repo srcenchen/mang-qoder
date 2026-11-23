@@ -171,8 +171,10 @@
     max(var(--gl), 5.2vw);
 }
 .m-title-main {
+  flex: 0 1 620px;
   min-width: 0;
   max-width: 620px;
+  container-type: inline-size;
 }
 .m-eyebrow {
   display: flex;
@@ -198,7 +200,8 @@
 }
 .m-word {
   font-weight: 900;
-  font-size: clamp(42px, 7.6vw, 94px);
+  font-size: clamp(30px, 6vw, 94px);
+  font-size: clamp(30px, min(7.6vw, 14.5cqi), 94px);
   line-height: 1.06;
   letter-spacing: 0.08em;
   margin: 14px 0 18px;
@@ -336,6 +339,7 @@
 
 /* ===================================================================== HUD */
 .hud {
+  --bottom-hud-offset: calc(20px + var(--sab));
   position: absolute;
   inset: 0;
   z-index: 20;
@@ -637,10 +641,13 @@
   position: absolute;
   left: 0;
   right: 0;
-  bottom: calc(154px + var(--sab));
+  bottom: calc(154px + var(--bottom-hud-offset));
   display: flex;
   justify-content: center;
   pointer-events: none;
+}
+.ctx-action-wrap[hidden] {
+  display: none;
 }
 .ctx-btn {
   pointer-events: auto;
@@ -689,7 +696,7 @@
   position: absolute;
   left: 16px;
   right: 16px;
-  bottom: calc(96px + var(--sab));
+  bottom: calc(96px + var(--bottom-hud-offset));
   display: flex;
   justify-content: center;
   pointer-events: none;
@@ -699,10 +706,10 @@
 }
 @media (min-width: 768px) {
   .comms-wrap {
-    bottom: calc(32px + var(--sab));
+    bottom: calc(32px + var(--bottom-hud-offset));
   }
   .ctx-action-wrap {
-    bottom: calc(122px + var(--sab));
+    bottom: calc(122px + var(--bottom-hud-offset));
   }
 }
 .comms-wrap.on {
@@ -1208,10 +1215,10 @@ body.high-contrast .cane-btn {
     font-size: 10px;
   }
   .comms-wrap {
-    bottom: 18px;
+    bottom: calc(18px + var(--bottom-hud-offset));
   }
   .ctx-action-wrap {
-    bottom: 84px;
+    bottom: calc(84px + var(--bottom-hud-offset));
   }
   .joy-zone {
     width: 92px;
@@ -1274,11 +1281,15 @@ body.high-contrast .cane-btn {
   display: block;
   width: 240px;
 }
+.stage-root.force-landscape .hud {
+  /* The stage's bottom faces the physical left edge after the 90 degree rotation. */
+  --bottom-hud-offset: calc(20px + env(safe-area-inset-left, 0px));
+}
 .stage-root.force-landscape .comms-wrap {
-  bottom: 16px;
+  bottom: calc(16px + var(--bottom-hud-offset));
 }
 .stage-root.force-landscape .ctx-action-wrap {
-  bottom: 84px;
+  bottom: calc(84px + var(--bottom-hud-offset));
 }
 .stage-root.force-landscape .joy-zone {
   width: 90px;

@@ -10,6 +10,8 @@ export interface ControllerCallbacks {
   onPointerLockChange: (locked: boolean) => void;
 }
 
+const OBSTACLE_BUMP_COOLDOWN_MS = 1200;
+
 export class FirstPersonController {
   public readonly camera: THREE.PerspectiveCamera;
   public readonly position = new THREE.Vector3(
@@ -63,7 +65,9 @@ export class FirstPersonController {
   private stepDistAccum = 0;
   private shakeTimer = 0;
   private shakeDuration = 0.22;
-  private lastObstacleBumpTime = -10;
+  private lastObstacleBumpTimes = new Map<string, number>();
+  private obstacleContacts = new Set<string>();
+  private frameObstacleContacts = new Set<string>();
   private lastAirwallNoticeTime = -10;
   private clockSec = 0;
 
@@ -125,7 +129,10 @@ export class FirstPersonController {
     this.yaw = 0;
     this.pitch = -0.09;
     this.sweepInput = 0;
+    this.lookPointerId = null;
+    this.joyPointerId = null;
     this.joyVec.set(0, 0);
+    this.joystickKnob.style.transform = 'translate(0px, 0px)';
     this.velocity.set(0, 0);
     this.keys.clear();
     this.rmbListening = false;
@@ -135,6 +142,10 @@ export class FirstPersonController {
     this.listenBlend = 0;
     this.stepDistAccum = 0;
     this.shakeTimer = 0;
+    this.lastObstacleBumpTimes.clear();
+    this.obstacleContacts.clear();
+    this.frameObstacleContacts.clear();
+    this.lastAirwallNoticeTime = -10;
     this.syncCamera(0);
   }
 
@@ -202,7 +213,7 @@ export class FirstPersonController {
     this.joystickZone.addEventListener('pointerdown', (e: PointerEvent) => {
       e.stopPropagation();
       e.preventDefault();
-      if (this.joyPointerId !== null) return;
+      if (!this.enabled || this.joyPointerId !== null || e.pointerId === this.lookPointerId) return;
       this.joyPointerId = e.pointerId;
       this.joystickZone.setPointerCapture(e.pointerId);
       const rect = this.joystickZone.getBoundingClientRect();
@@ -227,6 +238,7 @@ export class FirstPersonController {
     };
     this.joystickZone.addEventListener('pointerup', releaseJoy);
     this.joystickZone.addEventListener('pointercancel', releaseJoy);
+    this.joystickZone.addEventListener('lostpointercapture', releaseJoy);
 
     // Canvas Pointer / Mouse Handling:
     // - Desktop click captures mouse (Pointer Lock) AND once locked, LMB charges/taps cane & RMB listens!
@@ -285,18 +297,18 @@ export class FirstPersonController {
     });
 
     const releaseLook = (e: PointerEvent) => {
-      if (e.button === 2) {
-        this.rmbListening = false;
-      }
-      if (e.button === 0 && this.lmbCharging) {
-        this.lmbCharging = false;
-        this.callbacks.onPrimaryHoldEnd();
-        return;
+      if (e.pointerType === 'mouse') {
+        if (e.button === 2) this.rmbListening = false;
+        if (e.button === 0 && this.lmbCharging) {
+          this.lmbCharging = false;
+          this.callbacks.onPrimaryHoldEnd();
+          return;
+        }
       }
       if (e.pointerId !== this.lookPointerId) return;
       const dist = Math.hypot(e.clientX - this.lookStartX, e.clientY - this.lookStartY);
       this.lookPointerId = null;
-      if (dist < 10 && this.lookMovedDist < 14 && this.enabled) {
+      if (e.type === 'pointerup' && dist < 10 && this.lookMovedDist < 14 && this.enabled) {
         this.callbacks.onPrimaryHoldStart();
         this.callbacks.onPrimaryHoldEnd();
       }
@@ -417,6 +429,9 @@ export class FirstPersonController {
     this.position.x += this.velocity.x * dt;
     this.position.z += this.velocity.y * dt;
 
+    const contacts = this.frameObstacleContacts;
+    contacts.clear();
+    const radiusSq = PLAYER_RADIUS * PLAYER_RADIUS;
     for (let pass = 0; pass < 2; pass++) {
       for (const col of this.colliders) {
         if (!col.enabled) continue;
@@ -426,8 +441,15 @@ export class FirstPersonController {
         const dx = this.position.x - closestX;
         const dz = this.position.z - closestZ;
         const distSq = dx * dx + dz * dz;
+        const overlaps = distSq < radiusSq;
+        const wasTouching = this.obstacleContacts.has(col.id);
+        const newObstacleContact = col.isObstacle && overlaps && !wasTouching && !contacts.has(col.id);
+        // Keep resting contacts stable when collision resolution lands on the exact radius.
+        if (col.isObstacle && (overlaps || (wasTouching && distSq <= radiusSq + 1e-6))) {
+          contacts.add(col.id);
+        }
 
-        if (distSq < PLAYER_RADIUS * PLAYER_RADIUS) {
+        if (overlaps) {
           const dist = Math.sqrt(distSq);
           if (dist > 0.0001) {
             const overlap = PLAYER_RADIUS - dist;
@@ -445,22 +467,27 @@ export class FirstPersonController {
             else this.position.z = col.maxZ + PLAYER_RADIUS;
           }
 
-          if (pass === 0) {
-            if (col.isObstacle && this.clockSec - this.lastObstacleBumpTime > 1.15) {
-              this.lastObstacleBumpTime = this.clockSec;
+          if (newObstacleContact) {
+            const now = performance.now();
+            const lastBump = this.lastObstacleBumpTimes.get(col.id) ?? -Infinity;
+            if (now - lastBump >= OBSTACLE_BUMP_COOLDOWN_MS) {
+              this.lastObstacleBumpTimes.set(col.id, now);
               this.triggerCameraShake(0.22);
               this.callbacks.onObstacleBump(col);
-            } else if (
-              col.id === 'crosswalk_airwall' &&
-              this.clockSec - this.lastAirwallNoticeTime > 2.2
-            ) {
-              this.lastAirwallNoticeTime = this.clockSec;
-              this.callbacks.onAirwallBlocked();
             }
+          } else if (
+            pass === 0 &&
+            col.id === 'crosswalk_airwall' &&
+            this.clockSec - this.lastAirwallNoticeTime > 2.2
+          ) {
+            this.lastAirwallNoticeTime = this.clockSec;
+            this.callbacks.onAirwallBlocked();
           }
         }
       }
     }
+    this.frameObstacleContacts = this.obstacleContacts;
+    this.obstacleContacts = contacts;
 
     const movedDist = Math.hypot(this.position.x - prevX, this.position.z - prevZ);
     this.isMoving = movedDist > 0.0015;

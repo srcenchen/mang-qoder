@@ -185,6 +185,10 @@ export class SkyEnvironmentSystem {
 
     bakeDome.geometry.dispose();
     bakeMat.dispose();
+    warmCard.geometry.dispose();
+    warmCard.material.dispose();
+    coolCard.geometry.dispose();
+    coolCard.material.dispose();
 
     mainScene.environment = this.nightEnvRT.texture;
     mainScene.environmentIntensity = 0.92;
