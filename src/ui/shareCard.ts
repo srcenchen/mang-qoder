@@ -7,8 +7,9 @@ export interface PlaythroughStats {
 }
 
 /**
- * Generates a 9:16 vertical (1080x1920) dark-and-gold public-welfare empathy poster
- * entirely via local offscreen <canvas>, returning a PNG DataURL for download or WeChat long-press save.
+ * Generates a high-resolution 1080×1920 (9:16) editorial black-and-gold public-welfare empathy poster
+ * entirely via offscreen <canvas>. Frameless gallery typography, central Z-turn blind path + sonic
+ * ripple totem, oversized hairline-separated statistics, and crisp PNG download / mobile save.
  */
 export function generateEmpathySharePoster(stats: PlaythroughStats): string {
   const W = 1080;
@@ -18,193 +19,232 @@ export function generateEmpathySharePoster(stats: PlaythroughStats): string {
   canvas.height = H;
   const ctx = canvas.getContext('2d')!;
 
-  // 1. Deep Obsidian & After-Rain Sunset Gold Radial Background
+  // 1. Deep Obsidian & Subtle Warm After-Rain Horizon Background
   const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
-  bgGrad.addColorStop(0, '#07090e');
-  bgGrad.addColorStop(0.5, '#0c121f');
-  bgGrad.addColorStop(0.86, '#1f150e');
-  bgGrad.addColorStop(1, '#301b0c');
+  bgGrad.addColorStop(0, '#05070a');
+  bgGrad.addColorStop(0.45, '#090d14');
+  bgGrad.addColorStop(0.84, '#140f0b');
+  bgGrad.addColorStop(1, '#21150b');
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, W, H);
 
-  const glowGrad = ctx.createRadialGradient(W / 2, H * 0.78, 30, W / 2, H * 0.78, 640);
-  glowGrad.addColorStop(0, 'rgba(255, 179, 71, 0.28)');
-  glowGrad.addColorStop(0.45, 'rgba(56, 189, 248, 0.09)');
-  glowGrad.addColorStop(1, 'rgba(7, 9, 14, 0)');
-  ctx.fillStyle = glowGrad;
+  // Restrained central warm golden atmospheric halo
+  const centerGlow = ctx.createRadialGradient(W / 2, 860, 24, W / 2, 860, 520);
+  centerGlow.addColorStop(0, 'rgba(232, 176, 88, 0.22)');
+  centerGlow.addColorStop(0.48, 'rgba(132, 220, 232, 0.06)');
+  centerGlow.addColorStop(1, 'rgba(5, 7, 10, 0)');
+  ctx.fillStyle = centerGlow;
   ctx.fillRect(0, 0, W, H);
 
-  // 2. Decorative Sonic Echo Concentric Ripples
-  const ringCenterY = 610;
-  const radii = [140, 235, 340, 455];
-  radii.forEach((r, idx) => {
+  // Ultra-fine subtle gallery outer margin hairline (1px)
+  ctx.strokeStyle = 'rgba(232, 176, 88, 0.26)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(56, 56, W - 112, H - 112);
+
+  // =========================================================================
+  // TOP SECTION: Generous Whitespace + Braille + Editorial Serif Title
+  // =========================================================================
+  ctx.textAlign = 'center';
+
+  ctx.fillStyle = 'rgba(232, 176, 88, 0.85)';
+  ctx.font = '26px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.fillText('⠞⠊⠝⠛  ⠚⠊⠁⠝  ·  ⠍⠁⠝⠛  ⠙⠁⠕  ⠭⠊⠝⠛', W / 2, 195);
+
+  ctx.fillStyle = '#eeeae1';
+  ctx.font = '700 94px "Songti SC", "STSong", "Noto Serif CJK SC", "PingFang SC", serif';
+  ctx.fillText('听见 · 盲道行', W / 2, 326);
+
+  // Fine centered divider below title
+  ctx.strokeStyle = 'rgba(238, 234, 225, 0.22)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(W / 2 - 120, 376);
+  ctx.lineTo(W / 2 + 120, 376);
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(238, 234, 225, 0.78)';
+  ctx.font = '32px "PingFang SC", "Microsoft YaHei", sans-serif';
+  ctx.fillText('我用盲杖走过了一段 45 米的夜路', W / 2, 444);
+
+  // =========================================================================
+  // CENTERPIECE TOTEM: Minimalist Black-Gold Z-Turn Tactile Path + Sonic Ripples
+  // =========================================================================
+  const cx = W / 2;
+  const cy = 835;
+
+  // Delicate concentric elliptical sonic echo ripples (thin, feathered, dual-tone!)
+  const ringSpecs = [
+    { rx: 92, ry: 38, color: 'rgba(232, 176, 88, 0.78)', lw: 2.8 },
+    { rx: 174, ry: 72, color: 'rgba(132, 220, 232, 0.56)', lw: 2.0 },
+    { rx: 268, ry: 112, color: 'rgba(232, 176, 88, 0.34)', lw: 1.5 },
+    { rx: 370, ry: 156, color: 'rgba(132, 220, 232, 0.2)', lw: 1.2 },
+  ];
+  for (const r of ringSpecs) {
     ctx.save();
     ctx.beginPath();
-    ctx.ellipse(W / 2, ringCenterY, r * 1.05, r * 0.42, 0, 0, Math.PI * 2);
-    ctx.strokeStyle =
-      idx % 2 === 0
-        ? `rgba(255, 179, 71, ${0.46 - idx * 0.07})`
-        : `rgba(56, 189, 248, ${0.42 - idx * 0.06})`;
-    ctx.lineWidth = idx === 0 ? 4.5 : 2.5;
+    ctx.ellipse(cx, cy, r.rx, r.ry, 0, 0, Math.PI * 2);
+    ctx.strokeStyle = r.color;
+    ctx.lineWidth = r.lw;
     ctx.stroke();
     ctx.restore();
-  });
-
-  for (let i = 0; i < 75; i++) {
-    const sx = ((i * 173) % 960) + 60;
-    const sy = ((i * 293) % 1680) + 120;
-    const sr = 1.6 + (i % 3) * 1.2;
-    ctx.fillStyle = i % 3 === 0 ? 'rgba(255, 179, 71, 0.58)' : 'rgba(56, 189, 248, 0.45)';
-    ctx.beginPath();
-    ctx.arc(sx, sy, sr, 0, Math.PI * 2);
-    ctx.fill();
   }
 
-  // 3. Outer Editorial Gold Frame Border
-  ctx.strokeStyle = 'rgba(255, 179, 71, 0.42)';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(52, 52, W - 104, H - 104);
-
-  ctx.strokeStyle = 'rgba(232, 228, 218, 0.1)';
-  ctx.lineWidth = 1;
-  ctx.strokeRect(68, 68, W - 136, H - 136);
-
-  // 4. Braille + Title Typography
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#ffb347';
-  ctx.font = '30px monospace';
-  ctx.fillText('⠞⠊⠝⠛  ⠚⠊⠁⠝  ·  ⠍⠁⠝⠛  ⠙⠁⠕  ⠭⠊⠝⠛', W / 2, 172);
-
-  ctx.fillStyle = '#e8e4da';
-  ctx.font = 'bold 88px "PingFang SC", "Microsoft YaHei", sans-serif';
-  ctx.fillText('听见 · 盲道行', W / 2, 286);
-
-  ctx.fillStyle = 'rgba(186, 230, 253, 0.88)';
-  ctx.font = '30px "PingFang SC", "Microsoft YaHei", sans-serif';
-  ctx.fillText('城市无障碍第一人称声波共情体验记录', W / 2, 350);
-
-  // Minimalist Red-White Guide Cane Illustration
+  // Stylized golden Z-turn tactile path line crossing cleanly through the totem
   ctx.save();
-  ctx.strokeStyle = '#f8fafc';
-  ctx.lineWidth = 9;
+  const pathGrad = ctx.createLinearGradient(cx - 220, cy + 210, cx + 220, cy - 210);
+  pathGrad.addColorStop(0, 'rgba(232, 176, 88, 0.08)');
+  pathGrad.addColorStop(0.28, 'rgba(232, 176, 88, 0.85)');
+  pathGrad.addColorStop(0.72, 'rgba(245, 198, 120, 0.92)');
+  pathGrad.addColorStop(1, 'rgba(232, 176, 88, 0.12)');
+
+  // Draw twin parallel tactile guiding rails with two crisp 90-degree-like urban turns
+  for (const offset of [-10, 0, 10]) {
+    ctx.strokeStyle = pathGrad;
+    ctx.lineWidth = offset === 0 ? 3.2 : 1.6;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx - 195 + offset, cy + 215);
+    ctx.lineTo(cx - 85 + offset, cy + 72);
+    ctx.lineTo(cx + 85 + offset, cy - 42);
+    ctx.lineTo(cx + 185 + offset, cy - 195);
+    ctx.stroke();
+  }
+
+  // Turning blister-dot clusters at the two corner nodes
+  for (const [tx, ty] of [
+    [cx - 85, cy + 72],
+    [cx + 85, cy - 42],
+  ]) {
+    ctx.fillStyle = '#f5c678';
+    for (let dx = -12; dx <= 12; dx += 12) {
+      for (let dy = -12; dy <= 12; dy += 12) {
+        ctx.beginPath();
+        ctx.arc(tx + dx, ty + dy, 3.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  // Minimalist red-white guide cane angled delicately to touch the center ripple
+  ctx.strokeStyle = '#eeeae1';
+  ctx.lineWidth = 7;
   ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.moveTo(W / 2 + 210, ringCenterY - 125);
-  ctx.lineTo(W / 2 + 52, ringCenterY - 32);
+  ctx.moveTo(cx + 230, cy - 135);
+  ctx.lineTo(cx + 58, cy - 34);
   ctx.stroke();
 
-  ctx.strokeStyle = '#ef4444';
+  ctx.strokeStyle = '#dc2626';
+  ctx.lineWidth = 7;
   ctx.beginPath();
-  ctx.moveTo(W / 2 + 52, ringCenterY - 32);
-  ctx.lineTo(W / 2, ringCenterY);
+  ctx.moveTo(cx + 58, cy - 34);
+  ctx.lineTo(cx, cy);
   ctx.stroke();
 
-  ctx.fillStyle = '#fef3c7';
+  // Soft golden contact point glow at cane tip
+  const tipGlow = ctx.createRadialGradient(cx, cy, 2, cx, cy, 32);
+  tipGlow.addColorStop(0, 'rgba(255, 244, 214, 0.98)');
+  tipGlow.addColorStop(0.45, 'rgba(232, 176, 88, 0.55)');
+  tipGlow.addColorStop(1, 'rgba(232, 176, 88, 0)');
+  ctx.fillStyle = tipGlow;
   ctx.beginPath();
-  ctx.arc(W / 2, ringCenterY, 10, 0, Math.PI * 2);
+  ctx.arc(cx, cy, 32, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#fff9ec';
+  ctx.beginPath();
+  ctx.arc(cx, cy, 7.5, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 
-  // 5. Four Sculpted Data Cards (2x2 Grid for crisp typography!)
-  const gridTop = 790;
-  const cardW = 432;
-  const cardH = 165;
-  const gapX = 32;
-  const gapY = 26;
-  const startX = (W - (cardW * 2 + gapX)) / 2;
-
-  const metricItems = [
-    {
-      value: `${stats.elapsedSeconds}s`,
-      label: '雨夜盲行总耗时',
-      sub: '45 米真实城市街角',
-      accent: '#ffb347',
-    },
-    {
-      value: `${stats.caneTaps}`,
-      label: '盲杖探路敲击',
-      sub: '以回响丈量每一寸前路',
-      accent: '#38bdf8',
-    },
-    {
-      value: `${stats.obstacleBumps}`,
-      label: '遭遇占道碰壁',
-      sub: stats.obstacleBumps === 0 ? '谨慎探路零碰壁' : '违停单车与施工围挡',
-      accent: '#fda4af',
-    },
-    {
-      value: `${stats.memoriesFound}/${stats.memoriesTotal}`,
-      label: '听见的城市微光',
-      sub: '无障碍细节触感记录',
-      accent: '#6ee7b7',
-    },
-  ];
-
-  metricItems.forEach((item, i) => {
-    const col = i % 2;
-    const row = Math.floor(i / 2);
-    const cx = startX + col * (cardW + gapX);
-    const cy = gridTop + row * (cardH + gapY);
-
-    ctx.fillStyle = 'rgba(15, 21, 32, 0.82)';
-    ctx.strokeStyle = 'rgba(255, 179, 71, 0.34)';
-    ctx.lineWidth = 2;
+  // Sparse, delicate micro-dust glints around the totem (restrained, never noisy!)
+  for (let i = 0; i < 24; i++) {
+    const ang = i * 2.39996;
+    const dist = 90 + (i % 7) * 46;
+    const sx = cx + Math.cos(ang) * dist;
+    const sy = cy + Math.sin(ang) * dist * 0.48;
+    ctx.fillStyle = i % 2 === 0 ? 'rgba(245, 198, 120, 0.52)' : 'rgba(132, 220, 232, 0.42)';
     ctx.beginPath();
-    ctx.roundRect(cx, cy, cardW, cardH, 20);
+    ctx.arc(sx, sy, 1.8 + (i % 2) * 1.1, 0, Math.PI * 2);
     ctx.fill();
-    ctx.stroke();
+  }
 
-    ctx.textAlign = 'left';
-    ctx.fillStyle = item.accent;
-    ctx.font = 'bold 62px ui-monospace, SFMono-Regular, Menlo, monospace';
-    ctx.fillText(item.value, cx + 30, cy + 78);
-
-    ctx.fillStyle = '#e8e4da';
-    ctx.font = 'bold 28px "PingFang SC", "Microsoft YaHei", sans-serif';
-    ctx.fillText(item.label, cx + 30, cy + 124);
-
-    ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
-    ctx.font = '20px "PingFang SC", "Microsoft YaHei", sans-serif';
-    ctx.fillText(item.sub, cx + 30, cy + 152);
-  });
-
-  // 6. Empathy Quote Block
-  ctx.textAlign = 'center';
-  ctx.fillStyle = 'rgba(255, 179, 71, 0.9)';
-  ctx.font = '46px serif';
-  ctx.fillText('“', W / 2, 1240);
-
-  const quoteLines = [
-    '在全黑的雨夜里，每一次盲杖落地的脆响，',
-    '都是中国 1731 万视障者走出家门的勇气。',
-    '挪开一辆占道的单车，或是在路口轻声回应一句：',
-    '“别急，变绿灯了”——你就是城市里的那束暖光。',
+  // =========================================================================
+  // DATA HIGHLIGHT STRIP: Oversized Open Monospace Numbers, 1px Vertical Hairlines, ZERO Boxes!
+  // =========================================================================
+  const metricsY = 1235;
+  const colPositions = [230, 540, 850];
+  const heroMetrics = [
+    { value: `${stats.elapsedSeconds}s`, label: '总耗时', color: '#f5c678' },
+    { value: `${stats.caneTaps}`, label: '盲杖探路', color: '#84dce8' },
+    { value: `${stats.obstacleBumps}`, label: '障碍碰壁', color: '#eeeae1' },
   ];
-  ctx.fillStyle = '#e8e4da';
-  ctx.font = '32px "PingFang SC", "Microsoft YaHei", sans-serif';
-  quoteLines.forEach((line, idx) => {
-    ctx.fillText(line, W / 2, 1306 + idx * 56);
-  });
 
-  ctx.strokeStyle = 'rgba(255, 179, 71, 0.45)';
-  ctx.lineWidth = 1.5;
+  // Top & bottom ultra-thin hairline framing the open data strip
+  ctx.strokeStyle = 'rgba(238, 234, 225, 0.16)';
+  ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(W / 2 - 220, 1575);
-  ctx.lineTo(W / 2 + 220, 1575);
+  ctx.moveTo(120, metricsY - 88);
+  ctx.lineTo(W - 120, metricsY - 88);
+  ctx.moveTo(120, metricsY + 114);
+  ctx.lineTo(W - 120, metricsY + 114);
   ctx.stroke();
 
-  // 7. Public Welfare Footer
-  ctx.fillStyle = '#ffb347';
-  ctx.font = 'bold 38px "PingFang SC", "Microsoft YaHei", sans-serif';
-  ctx.fillText('请把盲道还给盲杖 · 让善意被听见', W / 2, 1648);
+  // Two crisp vertical hairlines between the 3 columns
+  for (const divX of [385, 695]) {
+    ctx.strokeStyle = 'rgba(238, 234, 225, 0.2)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(divX, metricsY - 46);
+    ctx.lineTo(divX, metricsY + 58);
+    ctx.stroke();
+  }
 
-  ctx.fillStyle = 'rgba(255, 179, 71, 0.68)';
-  ctx.font = '26px monospace';
-  ctx.fillText('⠇⠑⠞  ⠅⠊⠝⠙⠝⠑⠎⠎  ⠃⠑  ⠓⠑⠁⠗⠙', W / 2, 1705);
+  heroMetrics.forEach((m, idx) => {
+    const mx = colPositions[idx];
+    ctx.textAlign = 'center';
+    ctx.fillStyle = m.color;
+    ctx.font = '700 84px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.fillText(m.value, mx, metricsY + 14);
 
-  ctx.fillStyle = 'rgba(148, 163, 184, 0.78)';
+    ctx.fillStyle = 'rgba(182, 192, 200, 0.85)';
+    ctx.font = '26px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillText(m.label, mx, metricsY + 68);
+  });
+
+  // Subtle single-line memory glow tally beneath
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(232, 176, 88, 0.8)';
+  ctx.font = '25px "PingFang SC", "Microsoft YaHei", sans-serif';
+  ctx.fillText(
+    `✦  听见的城市微光  ${stats.memoriesFound} / ${stats.memoriesTotal}`,
+    W / 2,
+    metricsY + 172
+  );
+
+  // =========================================================================
+  // BOTTOM PUBLIC-WELFARE QUOTE & QUIET FOOTER
+  // =========================================================================
+  ctx.fillStyle = '#eeeae1';
+  ctx.font = '34px "Songti SC", "STSong", "Noto Serif CJK SC", "PingFang SC", serif';
+  ctx.fillText('“下次路过盲道时，顺手挪开挡路的单车，', W / 2, 1566);
+  ctx.fillText('就是为另一个人点亮前方的路。”', W / 2, 1628);
+
+  ctx.strokeStyle = 'rgba(232, 176, 88, 0.42)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(W / 2 - 110, 1700);
+  ctx.lineTo(W / 2 + 110, 1700);
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(232, 176, 88, 0.72)';
+  ctx.font = '22px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.fillText('⠇⠑⠞  ⠅⠊⠝⠙⠝⠑⠎⠎  ⠃⠑  ⠓⠑⠁⠗⠙', W / 2, 1756);
+
+  ctx.fillStyle = 'rgba(148, 163, 184, 0.82)';
   ctx.font = '24px "PingFang SC", "Microsoft YaHei", sans-serif';
-  ctx.fillText('2026 Qoder 高校创造力大赛 · 城市无障碍公益互动作品', W / 2, 1802);
+  ctx.fillText('2026 Qoder 高校创造力大赛 · 无障碍共情体验', W / 2, 1816);
 
   return canvas.toDataURL('image/png');
 }

@@ -13,10 +13,10 @@ varying float vAlpha;
 varying vec3 vColor;
 
 bool isSheltered(vec3 p) {
-  // Indoor foyer (Z > -5.55)
-  if (p.z > -5.55) return true;
-  // Breakfast stall awning overhang (X in [-4.5, -1.9], Z in [-26.5, -22.8], Y < 2.65)
-  if (p.x < -1.9 && p.x > -4.6 && p.z < -22.7 && p.z > -26.5 && p.y < 2.65) return true;
+  // Indoor foyer (Z > -5.55 && X in [-2.2, 2.2])
+  if (p.z > -5.55 && abs(p.x) < 2.2) return true;
+  // Breakfast stall awning overhang on Leg 3 (X in [9.6, 12.1], Z in [-25.5, -21.7], Y < 2.65)
+  if (p.x > 9.6 && p.x < 12.1 && p.z < -21.7 && p.z > -25.5 && p.y < 2.65) return true;
   return false;
 }
 
@@ -29,10 +29,10 @@ void main() {
   float kill = 0.0;
 
   if (aSeed.w < 0.0) {
-    // Eave drips falling off breakfast stall front canopy edge!
+    // Eave drips falling off breakfast stall front canopy edge (Leg 3, X = 11.9, Z = -25.3 to -21.9)!
     float T = 0.78;
     float t = fract(uTime / T * (0.85 + 0.3 * aSeed.y) + aSeed.z) * T;
-    p = vec3(-2.1 + 0.06 * sin(aSeed.x * 41.0), 2.52 - 4.9 * t * t, mix(-26.3, -22.9, aSeed.x));
+    p = vec3(11.9 + 0.06 * sin(aSeed.x * 41.0), 2.52 - 4.9 * t * t, mix(-25.3, -21.9, aSeed.x));
     vel = vec3(0.0, -9.81 * t - 0.35, 0.0);
     len = 0.032 * length(vel) + 0.035;
     if (p.y < 0.08) kill = 1.0;
@@ -52,7 +52,7 @@ void main() {
   vec3 wp = p + dir * (len * (position.y - 0.5)) + side * (w * position.x);
 
   // Subtle illumination boost near stall warm lantern & golden sunset
-  float stallDist = distance(p, vec3(-2.4, 2.0, -24.6));
+  float stallDist = distance(p, vec3(11.55, 2.0, -23.6));
   float stallGlow = 1.0 - smoothstep(1.0, 5.2, stallDist);
   float distFade = smoothstep(0.6, 2.2, dist) * (1.0 - smoothstep(10.0, 18.0, dist));
 
@@ -105,11 +105,11 @@ void main() {
   vec2 r = sHash(aSeed.xy * 87.3 + cyc * 0.371) - 0.5;
   vec2 snap = floor(uCamPos.xz / 2.5) * 2.5;
   vec3 p = vec3(snap.x + r.x * 18.0, 0.088, snap.y + r.y * 18.0);
-  if (p.x > 2.95 || p.z < -32.35 && p.z > -42.2) p.y = 0.012;
+  if (p.x > 16.85 || (p.z < -29.85 && p.z > -39.75)) p.y = 0.012;
 
   float kill = 0.0;
-  if (p.z > -5.6) kill = 1.0;
-  if (p.x < -1.9 && p.z < -22.7 && p.z > -26.5) kill = 1.0;
+  if (p.z > -5.6 && abs(p.x) < 2.2) kill = 1.0;
+  if (p.x > 9.6 && p.x < 12.1 && p.z < -21.7 && p.z > -25.5) kill = 1.0;
   if (fract(aSeed.w * 5.3 + cyc * 0.17) > uIntensity) kill = 1.0;
 
   float sz = mix(0.032, 0.065, aSeed.z);
@@ -121,7 +121,7 @@ void main() {
   vec3 side = normalize(vec3(toP.z, 0.0, -toP.x + 1e-4));
   vec3 wp = p + side * (wd * position.x * 2.0) + vec3(0.0, ht * position.y, 0.0);
 
-  float stallGlow = 1.0 - smoothstep(1.0, 4.8, distance(p, vec3(-2.4, 0.5, -24.6)));
+  float stallGlow = 1.0 - smoothstep(1.0, 4.8, distance(p, vec3(11.55, 0.5, -23.6)));
   vColor = mix(vec3(0.34, 0.56, 0.78), vec3(1.25, 0.82, 0.42), clamp(stallGlow + uSunset * 0.85, 0.0, 1.0));
   float darkMask = 0.08 + 0.92 * max(uWorldVis, stallGlow * 0.85);
   vAlpha = (1.0 - life) * (1.0 - smoothstep(8.0, 14.0, dist)) * (0.18 + stallGlow * 0.35 + uSunset * 0.32) * darkMask * (1.0 - kill);

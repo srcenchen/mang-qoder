@@ -24,9 +24,10 @@ export class GuideCaneSystem {
 
   private raycaster = new THREE.Raycaster();
 
-  /** Rhythmic Two-Point Touch: single/timed-out tap hits aimed center (0); continuous taps alternate subtly Left (-1) / Right (+1) */
+  /** Rhythmic Two-Point Touch + 350ms throttle cooldown so rapid clicks stay crisp and restrained */
   private nextComboSide: -1 | 1 = -1;
   private lastTapTimeSec = -10;
+  private readonly minTapCooldownSec = 0.35;
   private readonly comboTimeoutSec = 0.85;
   private currentSidePos = 0; // 0 = aimed center, subtle ±0.34 during continuous alternating taps
   private targetSidePos = 0;
@@ -41,6 +42,11 @@ export class GuideCaneSystem {
   private tipWorldPos = new THREE.Vector3();
   private handWorldPos = new THREE.Vector3();
   private rayDir = new THREE.Vector3();
+  private probeOrigin = new THREE.Vector3();
+  private readonly downDir = new THREE.Vector3(0, -1, 0);
+  private hitPointScratch = new THREE.Vector3();
+  private raycastHits: THREE.Intersection[] = [];
+  private handLight!: THREE.PointLight;
   private elapsed = 0;
 
   private whiteShaftMat!: THREE.MeshStandardMaterial;
@@ -98,9 +104,11 @@ export class GuideCaneSystem {
       metalness: 0.3,
     });
 
-    const handLight = new THREE.PointLight('#bae6fd', 0.22, 1.5);
-    handLight.position.set(-0.1, 0.24, 0.2);
-    this.handRoot.add(handLight);
+    // Keep PointLight directly on always-visible camera (intensity = 0 initially) so toggling handRoot.visible
+    // NEVER changes NUM_POINT_LIGHTS or triggers synchronous WebGL shader recompilation!
+    this.handLight = new THREE.PointLight('#bae6fd', 0.0, 1.5);
+    this.handLight.position.set(0.22, -0.1, -0.22);
+    this.camera.add(this.handLight);
 
     const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.064, 0.34, 14), sleeveMat);
     sleeve.rotation.x = Math.PI / 2 - 0.18;
@@ -161,6 +169,7 @@ export class GuideCaneSystem {
   public reset(): void {
     this.equipped = false;
     this.handRoot.visible = false;
+    this.handLight.intensity = 0;
     this.totalTaps = 0;
     this.nextComboSide = -1;
     this.lastTapTimeSec = -10;
@@ -199,6 +208,7 @@ export class GuideCaneSystem {
    */
   public triggerTap(isHeavyEcho = false): void {
     if (!this.equipped) return;
+    if (this.elapsed - this.lastTapTimeSec < this.minTapCooldownSec) return;
 
     const isContinuous = this.elapsed - this.lastTapTimeSec <= this.comboTimeoutSec;
     this.lastTapTimeSec = this.elapsed;
@@ -262,27 +272,32 @@ export class GuideCaneSystem {
     this.raycaster.near = 0.1;
     this.raycaster.far = 3.1;
 
-    const hits = this.raycaster.intersectObjects(this.raycastTargets, true);
-    if (hits.length > 0) {
+    this.raycastHits.length = 0;
+    this.raycaster.intersectObjects(this.raycastTargets, true, this.raycastHits);
+    if (this.raycastHits.length > 0) {
+      this.hitPointScratch.copy(this.raycastHits[0].point);
       return {
-        point: hits[0].point.clone(),
-        tag: this.resolveTag(hits[0].object),
+        point: this.hitPointScratch,
+        tag: this.resolveTag(this.raycastHits[0].object),
       };
     }
 
-    const probeOrigin = new THREE.Vector3(this.tipWorldPos.x, 1.4, this.tipWorldPos.z);
-    this.raycaster.set(probeOrigin, new THREE.Vector3(0, -1, 0));
+    this.probeOrigin.set(this.tipWorldPos.x, 1.4, this.tipWorldPos.z);
+    this.raycaster.set(this.probeOrigin, this.downDir);
     this.raycaster.far = 2.2;
-    const floorHits = this.raycaster.intersectObjects(this.raycastTargets, true);
-    if (floorHits.length > 0) {
+    this.raycastHits.length = 0;
+    this.raycaster.intersectObjects(this.raycastTargets, true, this.raycastHits);
+    if (this.raycastHits.length > 0) {
+      this.hitPointScratch.copy(this.raycastHits[0].point);
       return {
-        point: floorHits[0].point.clone(),
-        tag: this.resolveTag(floorHits[0].object),
+        point: this.hitPointScratch,
+        tag: this.resolveTag(this.raycastHits[0].object),
       };
     }
 
+    this.hitPointScratch.set(this.tipWorldPos.x, 0.08, this.tipWorldPos.z);
     return {
-      point: new THREE.Vector3(this.tipWorldPos.x, 0.08, this.tipWorldPos.z),
+      point: this.hitPointScratch,
       tag: 'normal',
     };
   }
@@ -340,6 +355,9 @@ export class GuideCaneSystem {
     this.canePivot.rotation.y = this.computePivotYaw(this.currentSidePos);
     this.canePivot.rotation.x = pitchOffset;
     this.canePivot.rotation.z = rollOffset;
+
+    const targetHandLight = this.equipped ? 0.22 : 0.0;
+    this.handLight.intensity += (targetHandLight - this.handLight.intensity) * Math.min(1, dt * 8.0);
 
     if (!this.equipped) {
       return { tipPos: this.tipWorldPos.set(0, -50, 0), hoveredTag: 'normal' };

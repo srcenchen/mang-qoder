@@ -52,6 +52,8 @@ export class StoryScriptManager {
   private lastEscortZ = -31.8;
 
   private steppedOnTactile = false;
+  private turn1HintShown = false;
+  private turn2HintShown = false;
   private bikeHintShown = false;
   private barrierHintShown = false;
   private stallVisited = false;
@@ -67,6 +69,11 @@ export class StoryScriptManager {
 
   private playElapsed = 0;
   private running = false;
+  private tmpVec = new THREE.Vector3();
+  private targetCatLightIntensity = 0;
+  private targetPedHaloIntensity = 0;
+  private targetDoorCrackIntensity = 1.4;
+  private targetSunsetLightIntensity = 0.0;
 
   private colliders: ColliderBox[];
   private builtScene: BuiltSceneResult;
@@ -148,6 +155,8 @@ export class StoryScriptManager {
     this.builtScene.escortRig.playerLeftArmRoot.visible = false;
     this.builtScene.escortRig.joinedHandsLight.intensity = 0;
     this.steppedOnTactile = false;
+    this.turn1HintShown = false;
+    this.turn2HintShown = false;
     this.bikeHintShown = false;
     this.barrierHintShown = false;
     this.stallVisited = false;
@@ -172,7 +181,11 @@ export class StoryScriptManager {
     this.builtScene.catPointLight.intensity = 0;
     this.builtScene.pedestrianGroup.visible = false;
     this.builtScene.pedestrianHaloLight.intensity = 0;
-    this.builtScene.sunsetDirLight.intensity = 0.25;
+    this.builtScene.sunsetDirLight.intensity = 0.0;
+    this.targetCatLightIntensity = 0;
+    this.targetPedHaloIntensity = 0;
+    this.targetDoorCrackIntensity = 1.4;
+    this.targetSunsetLightIntensity = 0.0;
     this.builtScene.setPedestrianSignalGreen(false);
 
     this.showContextPrompt(null);
@@ -220,7 +233,7 @@ export class StoryScriptManager {
         5500,
         '盲杖回响'
       );
-    } else if ((tag === 'cat' || tag === 'stall') && !this.stallVisited && point.z < -21.5) {
+    } else if ((tag === 'cat' || tag === 'stall') && !this.stallVisited && point.x > 9.5 && point.z < -20.5) {
       this.triggerStallWarmth();
     } else if (tag === 'signal_pole') {
       this.completeMicroInteraction('signal_pole');
@@ -281,20 +294,13 @@ export class StoryScriptManager {
         '无障碍记录'
       );
     } else if (id === 'pet_cat') {
-      this.builtScene.catPointLight.intensity = 2.4;
+      this.targetCatLightIntensity = 2.4;
       this.echoManager.setCatGlow(1.45);
       this.soundEngine.playCatGreeting(-0.35);
-      this.echoManager.emitWave(
-        new THREE.Vector3(WAYPOINTS.catPos.x, 0.25, WAYPOINTS.catPos.z),
-        'amber',
-        6.2,
-        1.35,
-        1.3
-      );
-      this.builtScene.spawnSparkles(
-        new THREE.Vector3(WAYPOINTS.catPos.x, 0.3, WAYPOINTS.catPos.z),
-        true
-      );
+      this.tmpVec.set(WAYPOINTS.catPos.x, 0.25, WAYPOINTS.catPos.z);
+      this.echoManager.emitWave(this.tmpVec, 'amber', 4.8, 1.25, 1.15);
+      this.tmpVec.set(WAYPOINTS.catPos.x, 0.3, WAYPOINTS.catPos.z);
+      this.builtScene.spawnSparkles(this.tmpVec, true);
       this.a11yUI.showSubtitle(
         `【听见的微光 ${count}/3】温热的小猫蹭了蹭你的掌心——早点摊老板笑着说：“慢点走，前边路口快到了！”`,
         6800,
@@ -347,12 +353,16 @@ export class StoryScriptManager {
       // Switch 3D pedestrian signal lamp from RED to EMERALD GREEN!
       this.builtScene.setPedestrianSignalGreen(true);
 
-      // Spawn kind stranger nearby on your left-front so they walk right over to hold your hand!
+      // Spawn warm backlit silhouette escort ahead-right (~1.8m away so never blocking camera!)
       this.builtScene.pedestrianGroup.visible = true;
-      this.builtScene.pedestrianGroup.position.set(-0.85, 0.08, -33.8);
-      this.builtScene.pedestrianGroup.rotation.y = 0.25; // Facing back toward you as they walk up
-      this.builtScene.pedestrianHaloLight.intensity = 3.8;
-      this.builtScene.pedestrianHaloLight.position.set(-0.85, 1.85, -33.5);
+      this.builtScene.pedestrianGroup.position.set(WAYPOINTS.crosswalkCenterX + 0.72, 0.08, -31.1);
+      this.builtScene.pedestrianGroup.rotation.y = -0.22;
+      this.targetPedHaloIntensity = 2.8;
+      this.builtScene.pedestrianHaloLight.position.set(
+        WAYPOINTS.crosswalkCenterX + 0.72,
+        1.85,
+        -31.1
+      );
 
       // Update beacons
       const trafficB = this.beacons.find((b) => b.id === 'crosswalk_traffic');
@@ -360,8 +370,10 @@ export class StoryScriptManager {
       const strangerB = this.beacons.find((b) => b.id === 'stranger_voice');
       if (strangerB) strangerB.active = true;
 
-      this.echoManager.emitWave(new THREE.Vector3(-0.6, 0.15, -33.2), 'amber', 6.5, 1.4, 1.25);
-      this.builtScene.spawnSparkles(new THREE.Vector3(-0.6, 0.2, -33.0), true);
+      this.tmpVec.set(WAYPOINTS.crosswalkCenterX + 0.5, 0.15, -30.8);
+      this.echoManager.emitWave(this.tmpVec, 'amber', 4.6, 1.25, 1.0);
+      this.tmpVec.set(WAYPOINTS.crosswalkCenterX + 0.5, 0.2, -30.6);
+      this.builtScene.spawnSparkles(this.tmpVec, true);
 
       this.a11yUI.showSubtitle(
         '“别急，变绿灯了——来，拉着我的手，我扶你慢慢走过去！”',
@@ -374,19 +386,13 @@ export class StoryScriptManager {
   private triggerStallWarmth(): void {
     if (this.stallVisited) return;
     this.stallVisited = true;
-    this.builtScene.catPointLight.intensity = 1.75;
+    this.targetCatLightIntensity = Math.max(this.targetCatLightIntensity, 1.75);
     this.echoManager.setCatGlow(1.0);
     this.soundEngine.playCatGreeting(-0.5);
-    this.echoManager.emitWave(
-      new THREE.Vector3(WAYPOINTS.catPos.x, 0.12, WAYPOINTS.catPos.z),
-      'amber',
-      4.8,
-      1.25
-    );
-    this.builtScene.spawnSparkles(
-      new THREE.Vector3(WAYPOINTS.catPos.x, 0.15, WAYPOINTS.catPos.z),
-      true
-    );
+    this.tmpVec.set(WAYPOINTS.catPos.x, 0.12, WAYPOINTS.catPos.z);
+    this.echoManager.emitWave(this.tmpVec, 'amber', 4.6, 1.2);
+    this.tmpVec.set(WAYPOINTS.catPos.x, 0.15, WAYPOINTS.catPos.z);
+    this.builtScene.spawnSparkles(this.tmpVec, true);
     this.a11yUI.showSubtitle(
       '“小心脚下，刚下过雨路有点滑。” —— 街角早点摊飘来竹笼热气，脚边的小猫轻声回应。',
       6800,
@@ -399,7 +405,7 @@ export class StoryScriptManager {
     if (slot) {
       slot.active = true;
       slot.group.visible = true;
-      slot.group.position.x = dir === 1 ? -26 : 26;
+      slot.group.position.x = WAYPOINTS.crosswalkCenterX + (dir === 1 ? -26 : 26);
       slot.speed = 23 + Math.random() * 4;
     }
     if (audioBoost > 0) {
@@ -429,13 +435,8 @@ export class StoryScriptManager {
         .slice(0, 2);
 
       for (const item of sorted) {
-        this.echoManager.emitWave(
-          new THREE.Vector3(item.b.x, Math.min(0.65, item.b.y), item.b.z),
-          item.b.color,
-          4.2,
-          0.95,
-          1.15
-        );
+        this.tmpVec.set(item.b.x, Math.min(0.65, item.b.y), item.b.z);
+        this.echoManager.emitWave(this.tmpVec, item.b.color, 4.2, 0.95, 1.0);
       }
     }
   }
@@ -443,7 +444,7 @@ export class StoryScriptManager {
   private canRequestHelp(playerPos: THREE.Vector3): boolean {
     return this.running && this.hasCane && !this.endingTriggered && !this.strangerArrived &&
       this.helpPressCount < HELP_PROMPTS.length &&
-      Math.abs(playerPos.x) <= WAYPOINTS.crosswalkHalfWidth &&
+      Math.abs(playerPos.x - WAYPOINTS.crosswalkCenterX) <= WAYPOINTS.crosswalkHalfWidth &&
       playerPos.z >= WAYPOINTS.crosswalkCurbZ && playerPos.z <= WAYPOINTS.crosswalkPromptZ;
   }
 
@@ -468,7 +469,9 @@ export class StoryScriptManager {
 
   private showContextPrompt(action: 'help' | MicroInteraction | null): void {
     const hidden = action === null;
-    const label = action === 'help' ? HELP_PROMPTS[this.helpPressCount] : action?.promptText ?? '';
+    const rawLabel = action === 'help' ? HELP_PROMPTS[this.helpPressCount] : action?.promptText ?? '';
+    // Strip inline "[E]" since the frameless prompt renders a crisp left [E] micro-keycap
+    const label = rawLabel.replace(/\s*\[E\]/g, '').trim();
     const braille = action === 'help' ? '⠠⠓⠑⠇⠏ · ⠟⠊⠥ 助' : action?.brailleHint ?? '';
     if (this.ctxWrap.hidden !== hidden) {
       this.ctxWrap.hidden = hidden;
@@ -493,6 +496,17 @@ export class StoryScriptManager {
     if (this.helpCooldown > 0) {
       this.helpCooldown = Math.max(0, this.helpCooldown - dt);
     }
+
+    // Smoothly interpolate permanent scene lights (zero runtime light add/remove!)
+    const lightLerp = Math.min(1, dt * 4.5);
+    this.builtScene.catPointLight.intensity +=
+      (this.targetCatLightIntensity - this.builtScene.catPointLight.intensity) * lightLerp;
+    this.builtScene.pedestrianHaloLight.intensity +=
+      (this.targetPedHaloIntensity - this.builtScene.pedestrianHaloLight.intensity) * lightLerp;
+    this.builtScene.doorCrackLight.intensity +=
+      (this.targetDoorCrackIntensity - this.builtScene.doorCrackLight.intensity) * lightLerp;
+    this.builtScene.sunsetDirLight.intensity +=
+      (this.targetSunsetLightIntensity - this.builtScene.sunsetDirLight.intensity) * lightLerp;
 
     this.updateFocusListenRadar(dt, playerPos, isListening);
     this.showContextPrompt(this.getContextAction(playerPos));
@@ -556,7 +570,7 @@ export class StoryScriptManager {
 
       this.builtScene.doorSliverMesh.visible = false;
       this.builtScene.doorShaftMesh.visible = false;
-      this.builtScene.doorCrackLight.intensity = 0.35;
+      this.targetDoorCrackIntensity = 0.35;
       this.soundEngine.playDoorOpen();
       this.callbacks.onCollidersUpdated();
       this.a11yUI.showSubtitle(
@@ -575,25 +589,63 @@ export class StoryScriptManager {
       );
     }
 
+    // Z-Turn Corner #1 tactile dot cue (Turn 90° Right -> +X)
+    if (!this.turn1HintShown) {
+      const distT1 = Math.hypot(
+        playerPos.x - WAYPOINTS.turn1Pos.x,
+        playerPos.z - WAYPOINTS.turn1Pos.z
+      );
+      if (distT1 < 1.35) {
+        this.turn1HintShown = true;
+        const turnB = this.beacons.find((b) => b.id === 'turn1_corner');
+        if (turnB) turnB.active = false;
+        this.tmpVec.set(WAYPOINTS.turn1Pos.x, 0.12, WAYPOINTS.turn1Pos.z);
+        this.echoManager.emitWave(this.tmpVec, 'amber', 4.4, 1.15, 0.95);
+        this.a11yUI.showSubtitle(
+          '脚下变成了凸起的圆点转向砖——盲道在这里向右转弯，顺着新方向敲杖探路吧。',
+          6200,
+          '触觉转向'
+        );
+      }
+    }
+
+    // Z-Turn Corner #2 tactile dot cue (Turn 90° Left -> -Z toward Breakfast Stall & Crosswalk)
+    if (!this.turn2HintShown) {
+      const distT2 = Math.hypot(
+        playerPos.x - WAYPOINTS.turn2Pos.x,
+        playerPos.z - WAYPOINTS.turn2Pos.z
+      );
+      if (distT2 < 1.45) {
+        this.turn2HintShown = true;
+        this.tmpVec.set(WAYPOINTS.turn2Pos.x, 0.12, WAYPOINTS.turn2Pos.z);
+        this.echoManager.emitWave(this.tmpVec, 'amber', 4.4, 1.15, 0.95);
+        this.a11yUI.showSubtitle(
+          '再次踩到圆点转向砖！向左拐进街角，前面隐约传来早点摊的蒸气与暖香。',
+          6200,
+          '触觉转向'
+        );
+      }
+    }
+
     // --- NODE 04: Street-Corner Warm Breakfast Stall & Cat ---
-    if (!this.stallVisited && playerPos.z <= -23.2 && playerPos.z >= -26.8) {
+    if (!this.stallVisited && playerPos.x > 10.0 && playerPos.z <= -21.8 && playerPos.z >= -26.2) {
       const distToCat = Math.hypot(
         playerPos.x - WAYPOINTS.catPos.x,
         playerPos.z - WAYPOINTS.catPos.z
       );
-      if (distToCat < 3.4) {
+      if (distToCat < 3.6) {
         this.triggerStallWarmth();
       }
     }
 
     // --- Periodic Binaural Crosswalk Traffic ---
-    if (playerPos.z <= -26.5 && !this.strangerArrived) {
+    if (playerPos.x > 10.0 && playerPos.z <= -24.5 && !this.strangerArrived) {
       this.trafficTimer -= dt;
       if (this.trafficTimer <= 0) {
-        const proximityBoost = playerPos.z <= -30.5 ? 1.15 : 0.65;
+        const proximityBoost = playerPos.z <= -28.0 ? 1.15 : 0.65;
         this.spawnTrafficBurst(this.nextTrafficDir, proximityBoost);
         this.nextTrafficDir = this.nextTrafficDir === 1 ? -1 : 1;
-        this.trafficTimer = playerPos.z <= -30.5 ? 2.15 : 3.1;
+        this.trafficTimer = playerPos.z <= -28.0 ? 2.15 : 3.1;
       }
     }
 
@@ -619,14 +671,15 @@ export class StoryScriptManager {
       let strideAmp = 0;
 
       if (this.escortPhase === 'approaching') {
-        const meetX = playerPos.x - 0.56;
-        const meetZ = playerPos.z - 0.8;
+        // Position warm backlit silhouette 1.5m ahead-right of player (clear, respectful sightline!)
+        const meetX = playerPos.x + 0.65;
+        const meetZ = playerPos.z - 1.35;
         const dx = meetX - ped.position.x;
         const dz = meetZ - ped.position.z;
         const dist = Math.hypot(dx, dz);
 
-        if (dist > 0.14) {
-          const stepSpeed = Math.min(dist, 1.65 * dt);
+        if (dist > 0.16) {
+          const stepSpeed = Math.min(dist, 1.85 * dt);
           ped.position.x += (dx / dist) * stepSpeed;
           ped.position.z += (dz / dist) * stepSpeed;
           this.escortStridePhase += dt * 7.2;
@@ -638,7 +691,7 @@ export class StoryScriptManager {
             this.soundEngine.playCompanionFootstep();
           }
         } else {
-          // Arrived right beside your left shoulder -> clasp hands & lift crosswalk airwall!
+          // Escort is in position 1.5m ahead-right -> lift crosswalk airwall & lead across!
           this.escortPhase = 'holding_hands';
           this.lastEscortZ = playerPos.z;
           const airwall = this.colliders.find((c) => c.id === 'crosswalk_airwall');
@@ -647,28 +700,25 @@ export class StoryScriptManager {
           this.callbacks.onEscortAssistChange(true);
 
           this.a11yUI.showSubtitle(
-            '温暖的手稳稳握住了你的左手——跟着身旁人的脚步，一起穿过斑马线吧。',
+            '温暖的身影在右前方一步半处稳稳引路——跟着身旁人的脚步，一起穿过斑马线吧。',
             7200,
             '并肩同行'
           );
         }
       } else if (this.escortPhase === 'holding_hands') {
-        // Smoothly reach out & clasp hands!
         this.escortHoldingBlend = Math.min(1.0, this.escortHoldingBlend + dt * 2.2);
 
-        // Stranger walks half a step ahead on your left (authentic sighted-guide position!)
-        const targetX = playerPos.x - 0.54;
-        const targetZ = playerPos.z - 0.78;
-        const targetY = playerPos.z < -32.4 && playerPos.z > -42.2 ? 0.02 : 0.08;
-        ped.position.x += (targetX - ped.position.x) * Math.min(1, dt * 7.5);
-        ped.position.z += (targetZ - ped.position.z) * Math.min(1, dt * 7.5);
+        // Escort leads smoothly 1.5m ahead-right (0.65m right, 1.35m ahead -> hypot = 1.50m, never blocking view!)
+        const targetX = Math.min(WAYPOINTS.crosswalkCenterX + 1.45, playerPos.x + 0.65);
+        const targetZ = playerPos.z - 1.35;
+        const targetY = targetZ < -29.9 && targetZ > -39.7 ? 0.02 : 0.08;
+        ped.position.x += (targetX - ped.position.x) * Math.min(1, dt * 6.5);
+        ped.position.z += (targetZ - ped.position.z) * Math.min(1, dt * 6.5);
         ped.position.y += (targetY - ped.position.y) * Math.min(1, dt * 6.0);
 
-        // Smoothly turn to face forward (-Z, i.e., rotation.y = Math.PI) alongside you
-        const targetYaw = Math.PI - 0.14;
+        const targetYaw = Math.PI + 0.14;
         ped.rotation.y += (targetYaw - ped.rotation.y) * Math.min(1, dt * 4.5);
 
-        // Synchronize walking stride & left-ear companion footsteps with actual forward progress
         const forwardDelta = Math.abs(playerPos.z - this.lastEscortZ);
         this.lastEscortZ = playerPos.z;
         const speedNorm = Math.min(1.2, forwardDelta / Math.max(0.001, dt));
@@ -684,39 +734,30 @@ export class StoryScriptManager {
         }
 
         // Gradual golden warmth begins illuminating the wet zebra stripes while crossing together!
-        const crossT = THREE.MathUtils.clamp((-32.0 - playerPos.z) / 11.0, 0, 1);
+        const crossT = THREE.MathUtils.clamp((-29.5 - playerPos.z) / 11.0, 0, 1);
         const preludeSunset = crossT * 0.38;
         if (preludeSunset > this.sunsetProgress) {
           this.sunsetProgress = preludeSunset;
           this.echoManager.setSunsetFactor(preludeSunset * 0.85);
-          this.builtScene.sunsetDirLight.intensity = 0.25 + preludeSunset * 2.2;
+          this.targetSunsetLightIntensity = preludeSunset * 2.4;
         }
 
-        // Soft golden ripple every ~2s at your joined feet
         this.escortRippleTimer -= dt;
         if (this.escortRippleTimer <= 0) {
-          this.escortRippleTimer = 1.9;
-          this.echoManager.emitWave(
-            new THREE.Vector3(ped.position.x + 0.25, 0.08, ped.position.z),
-            'amber',
-            4.8,
-            1.15,
-            1.05
-          );
-          this.builtScene.spawnSparkles(
-            new THREE.Vector3(ped.position.x + 0.25, 0.15, ped.position.z),
-            true
-          );
+          this.escortRippleTimer = 2.1;
+          this.tmpVec.set(ped.position.x, 0.08, ped.position.z);
+          this.echoManager.emitWave(this.tmpVec, 'amber', 4.0, 1.05, 0.85);
+          this.tmpVec.set(ped.position.x, 0.15, ped.position.z);
+          this.builtScene.spawnSparkles(this.tmpVec, true);
         }
       } else if (this.escortPhase === 'arrived') {
-        // Safely across! Gently release hands, step onto opposite curb, turn around in golden sunset backlight!
+        // Safely across! Step onto opposite curb framed in golden sunset backlight (Ref Image 4!)
         this.escortHoldingBlend = Math.max(0.0, this.escortHoldingBlend - dt * 1.8);
-        const restX = -0.35;
-        const restZ = -44.6;
+        const restX = WAYPOINTS.crosswalkCenterX;
+        const restZ = -41.9;
         ped.position.x += (restX - ped.position.x) * Math.min(1, dt * 2.2);
         ped.position.z += (restZ - ped.position.z) * Math.min(1, dt * 2.2);
         ped.position.y += (0.08 - ped.position.y) * Math.min(1, dt * 4.0);
-        // Turn back toward player (+Z, rotation.y = 0) to say goodbye in sunset silhouette
         ped.rotation.y += (0.0 - ped.rotation.y) * Math.min(1, dt * 2.8);
         const rem = Math.hypot(restX - ped.position.x, restZ - ped.position.z);
         strideAmp = Math.min(1, rem * 1.5);
@@ -724,7 +765,8 @@ export class StoryScriptManager {
       }
 
       halo.position.set(ped.position.x, 1.8, ped.position.z - 0.15);
-      rig.updateHandClasp(dt, this.escortHoldingBlend, this.escortStridePhase, strideAmp, camera);
+      rig.updateEscortMotion(dt, this.escortHoldingBlend, this.escortStridePhase, strideAmp, totalElapsed);
+      void camera;
     }
 
     // --- NODE 06: Golden After-Rain Sunset Finale (Z <= -43.0, 2.5s Transition) ---
@@ -745,7 +787,7 @@ export class StoryScriptManager {
       this.sunsetProgress = Math.min(1.0, this.sunsetProgress + dt / 2.5);
       const ease = this.sunsetProgress * this.sunsetProgress * (3 - 2 * this.sunsetProgress);
       this.echoManager.setSunsetFactor(ease);
-      this.builtScene.sunsetDirLight.intensity = 0.25 + ease * 3.45;
+      this.targetSunsetLightIntensity = ease * 3.65;
       this.builtScene.ambientHemiLight.intensity = 0.85 + ease * 0.65;
 
       if (this.sunsetProgress >= 1.0 && !this.endingModalShown) {

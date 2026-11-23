@@ -1,6 +1,6 @@
 import './style.css';
 import * as THREE from 'three';
-import { createInitialColliders } from './level/levelData';
+import { createInitialColliders, isOnTactilePath, WAYPOINTS } from './level/levelData';
 import { buildGameScene } from './level/buildScene';
 import { EchoShaderManager } from './shaders/echoMaterial';
 import { FirstPersonController } from './player/controller';
@@ -54,6 +54,8 @@ class BlindPathGameApp {
   private screenFade = 1.0;
 
   private latestStats: PlaythroughStats | null = null;
+  private reflectionHideList: THREE.Object3D[] = [];
+  private tmpWaveOrigin = new THREE.Vector3();
 
   // UI Elements
   private stageRoot = document.getElementById('stage-root')!;
@@ -76,6 +78,7 @@ class BlindPathGameApp {
 
   // Ending & Share Card Elements
   private endingModal = document.getElementById('ending-modal')!;
+  private endingSummaryView = document.getElementById('ending-summary-view')!;
   private statTime = document.getElementById('stat-time')!;
   private statTaps = document.getElementById('stat-taps')!;
   private statBumps = document.getElementById('stat-bumps')!;
@@ -84,6 +87,8 @@ class BlindPathGameApp {
   private posterImg = document.getElementById('poster-img') as HTMLImageElement;
   private btnDownloadPoster = document.getElementById('btn-download-poster') as HTMLAnchorElement;
   private btnGeneratePoster = document.getElementById('btn-generate-poster')!;
+  private btnBackSummary = document.getElementById('btn-back-summary')!;
+  private btnPosterRoam = document.getElementById('btn-poster-roam')!;
   private btnAdmireSunset = document.getElementById('btn-admire-sunset')!;
   private btnRestart = document.getElementById('btn-restart')!;
   private btnReopenEnding = document.getElementById('btn-reopen-ending')!;
@@ -97,7 +102,7 @@ class BlindPathGameApp {
       antialias: false, // Handled cleanly by our FXAA post-pass!
       powerPreference: 'high-performance',
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, profile.maxDpr));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, Math.min(profile.maxDpr, 1.5)));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = profile.shadows;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -191,17 +196,14 @@ class BlindPathGameApp {
         this.soundEngine.playCaneTap(hit.tag, hit.pan, hit.isManualTap, hit.isHeavyEcho);
 
         if (hit.isManualTap) {
-          const radius = hit.isHeavyEcho ? 10.8 : 5.5;
-          const durScale = hit.isHeavyEcho ? 1.38 : 1.0;
-          const intensity = hit.isHeavyEcho ? 1.35 : 1.05;
+          // Restrained sonic echo radii (Round 3): light tap 4.3m (within 3.8~5.2m), heavy tap 7.2m (<= 7.5m)
+          const radius = hit.isHeavyEcho ? 7.2 : 4.3;
+          const durScale = hit.isHeavyEcho ? 1.28 : 1.0;
+          const intensity = hit.isHeavyEcho ? 1.15 : 0.95;
           this.echoManager.emitWave(hit.point, palette, radius, durScale, intensity);
           this.builtScene.spawnSparkles(hit.point, palette === 'amber');
-          if (hit.isHeavyEcho) {
-            // Subtle trailing harmonic ripple on charged heavy tap!
-            this.builtScene.spawnSparkles(hit.point, true);
-          }
         } else {
-          this.echoManager.emitWave(hit.point, palette, 2.5, 0.72, 0.8);
+          this.echoManager.emitWave(hit.point, palette, 2.4, 0.72, 0.75);
         }
 
         this.story.onCaneSurfaceHit(hit.tag, hit.point);
@@ -251,11 +253,8 @@ class BlindPathGameApp {
       this.colliders,
       {
         onFootstep: (pos) => {
-          const isIndoor = pos.z > -5.5;
-          const onTactile =
-            !isIndoor &&
-            ((pos.z <= -6.0 && pos.z >= -32.2 && Math.abs(pos.x) < 0.36) ||
-              (pos.z <= -31.3 && pos.z >= -32.35 && Math.abs(pos.x) < 1.8));
+          const isIndoor = pos.z > -5.5 && Math.abs(pos.x) < 2.2;
+          const onTactile = !isIndoor && isOnTactilePath(pos.x, pos.z);
           this.soundEngine.playFootstep(onTactile, isIndoor);
         },
         onObstacleBump: (collider) => {
@@ -280,11 +279,19 @@ class BlindPathGameApp {
       }
     );
 
+    this.reflectionHideList = [
+      ...this.builtScene.reflectiveGroundMeshes,
+      this.caneSystem.handRoot,
+      this.builtScene.escortRig.playerLeftArmRoot,
+    ];
+
     this.syncStageLayout();
     this.bindUIEvents();
+    this.precompileDynamicAssets();
 
-    // Seed an opening golden sonic ripple on the wet tactile street for the Live 3D Title Screen!
-    this.echoManager.emitWave(new THREE.Vector3(0, 0.12, -13.2), 'amber', 6.8, 1.35, 1.15);
+    // Seed an opening golden sonic ripple on the wet tactile street corner for the Live 3D Title Screen!
+    this.tmpWaveOrigin.set(WAYPOINTS.crosswalkCenterX, 0.12, -23.6);
+    this.echoManager.emitWave(this.tmpWaveOrigin, 'amber', 4.6, 1.3, 1.0);
 
     this.bootFill.style.width = '100%';
     window.setTimeout(() => {
@@ -292,6 +299,35 @@ class BlindPathGameApp {
     }, 320);
 
     this.animate();
+  }
+
+  /**
+   * Pre-compiles every dynamic mesh, hidden rig, traffic streak, and post-processing pass during boot
+   * while keeping all lights permanently active in the scene graph (intensity = 0 when idle),
+   * completely eliminating mid-game shader compilation stutter on cane pickup or crosswalk escort!
+   */
+  private precompileDynamicAssets(): void {
+    const prevHandVis = this.caneSystem.handRoot.visible;
+    const prevPedVis = this.builtScene.pedestrianGroup.visible;
+    const prevArmVis = this.builtScene.escortRig.playerLeftArmRoot.visible;
+    const prevDebugVis = this.builtScene.debugWireframeGroup.visible;
+    const prevTrafficVis = this.builtScene.trafficStreaks.map((t) => t.group.visible);
+
+    this.caneSystem.handRoot.visible = true;
+    this.builtScene.pedestrianGroup.visible = true;
+    this.builtScene.escortRig.playerLeftArmRoot.visible = true;
+    this.builtScene.debugWireframeGroup.visible = true;
+    for (const tr of this.builtScene.trafficStreaks) tr.group.visible = true;
+
+    this.renderer.compile(this.scene, this.camera);
+
+    this.caneSystem.handRoot.visible = prevHandVis;
+    this.builtScene.pedestrianGroup.visible = prevPedVis;
+    this.builtScene.escortRig.playerLeftArmRoot.visible = prevArmVis;
+    this.builtScene.debugWireframeGroup.visible = prevDebugVis;
+    for (let i = 0; i < this.builtScene.trafficStreaks.length; i++) {
+      this.builtScene.trafficStreaks[i].group.visible = prevTrafficVis[i];
+    }
   }
 
   private isMobileOrTouch(): boolean {
@@ -358,7 +394,7 @@ class BlindPathGameApp {
   private applyQuality(name: QualityName): void {
     this.qualityName = name;
     const p = QUALITY_PROFILES[name];
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, p.maxDpr));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, Math.min(p.maxDpr, 1.5)));
     this.renderer.shadowMap.enabled = p.shadows;
     this.builtScene.setShadowsEnabled(p.shadows, p.shadowMapSize);
     this.planarRefl.enabled = p.reflections;
@@ -460,19 +496,23 @@ class BlindPathGameApp {
       }
     });
 
-    // Ending Modal & 9:16 Share Poster
+    // Ending Overlay & Independent Centered 9:16 Poster Lightbox (Round 5)
     this.btnGeneratePoster.addEventListener('click', () => {
       if (!this.latestStats) return;
       const dataUrl = generateEmpathySharePoster(this.latestStats);
       this.posterImg.src = dataUrl;
       this.btnDownloadPoster.href = dataUrl;
+      this.endingSummaryView.classList.add('hidden');
       this.posterWrap.classList.remove('hidden');
-      this.posterWrap.classList.add('flex');
-      this.btnGeneratePoster.textContent = '↻ 重新生成海报';
-      this.a11yUI.speak('公益共情海报已生成，电脑端可点击下载，手机端可长按图片保存');
+      this.a11yUI.speak('公益共情海报已生成，电脑端可点击下载高清海报，手机端可长按图片保存');
     });
 
-    this.btnAdmireSunset.addEventListener('click', () => {
+    this.btnBackSummary.addEventListener('click', () => {
+      this.posterWrap.classList.add('hidden');
+      this.endingSummaryView.classList.remove('hidden');
+    });
+
+    const enterSunsetRoam = () => {
       this.endingModal.classList.add('hidden');
       this.btnReopenEnding.classList.remove('hidden');
       this.controller.modalOpen = false;
@@ -480,10 +520,15 @@ class BlindPathGameApp {
       if (!this.isMobileOrTouch()) {
         this.controller.requestPointerLock();
       }
-    });
+    };
+
+    this.btnAdmireSunset.addEventListener('click', enterSunsetRoam);
+    this.btnPosterRoam.addEventListener('click', enterSunsetRoam);
 
     this.btnReopenEnding.addEventListener('click', () => {
       this.btnReopenEnding.classList.add('hidden');
+      this.posterWrap.classList.add('hidden');
+      this.endingSummaryView.classList.remove('hidden');
       this.endingModal.classList.remove('hidden');
       this.controller.modalOpen = true;
       this.controller.exitPointerLock();
@@ -523,8 +568,7 @@ class BlindPathGameApp {
     this.statMemories.textContent = `${stats.memoriesFound}/${stats.memoriesTotal}`;
 
     this.posterWrap.classList.add('hidden');
-    this.posterWrap.classList.remove('flex');
-    this.btnGeneratePoster.textContent = '✦ 生成公益共情海报';
+    this.endingSummaryView.classList.remove('hidden');
     this.endingModal.classList.remove('hidden');
     this.controller.modalOpen = true;
     this.controller.exitPointerLock();
@@ -570,11 +614,13 @@ class BlindPathGameApp {
     if (!this.started) {
       this.attractWaveTimer -= dt;
       if (this.attractWaveTimer <= 0) {
-        this.attractWaveTimer = 2.6;
-        const z = -12.6 - Math.random() * 5.0;
+        this.attractWaveTimer = 2.9;
+        const z = -21.5 - Math.random() * 5.5;
         const warm = Math.random() > 0.35;
-        this.echoManager.emitWave(new THREE.Vector3(0, 0.12, z), warm ? 'amber' : 'cyan', 6.4, 1.25, 1.15);
-        this.builtScene.spawnSparkles(new THREE.Vector3(0, 0.14, z), warm);
+        this.tmpWaveOrigin.set(WAYPOINTS.crosswalkCenterX, 0.12, z);
+        this.echoManager.emitWave(this.tmpWaveOrigin, warm ? 'amber' : 'cyan', 4.5, 1.2, 0.95);
+        this.tmpWaveOrigin.set(WAYPOINTS.crosswalkCenterX, 0.14, z);
+        this.builtScene.spawnSparkles(this.tmpWaveOrigin, warm);
       }
       this.attractCarTimer -= dt;
       if (this.attractCarTimer <= 0) {
@@ -670,11 +716,7 @@ class BlindPathGameApp {
     const shouldReflect =
       this.planarRefl.enabled && (this.controller.attractMode || this.controller.position.z < -4.2);
     if (shouldReflect) {
-      this.planarRefl.render(this.renderer, this.scene, this.camera, [
-        ...this.builtScene.reflectiveGroundMeshes,
-        this.caneSystem.handRoot,
-        this.builtScene.escortRig.playerLeftArmRoot,
-      ]);
+      this.planarRefl.render(this.renderer, this.scene, this.camera, this.reflectionHideList);
       this.echoManager.setPlanarReflection(
         this.planarRefl.renderTarget.texture,
         this.planarRefl.textureMatrix,

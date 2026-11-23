@@ -337,11 +337,11 @@ export class FirstPersonController {
       const swayX = Math.sin(this.clockSec * 0.24) * 0.42;
       const swayY = Math.cos(this.clockSec * 0.35) * 0.08;
       this.camera.position.set(
-        0.65 + swayX,
+        WAYPOINTS.crosswalkCenterX + 0.65 + swayX,
         1.48 + swayY,
-        -9.6 + Math.sin(this.clockSec * 0.16) * 0.8
+        -18.0 + Math.sin(this.clockSec * 0.16) * 0.75
       );
-      this.camera.lookAt(-0.45, 0.92, -23.5);
+      this.camera.lookAt(WAYPOINTS.crosswalkCenterX - 0.5, 0.92, -31.5);
       this.camera.fov = 56;
       this.camera.updateProjectionMatrix();
       return;
@@ -414,9 +414,9 @@ export class FirstPersonController {
       desiredVz = (fwdZ * moveForward + rightZ * moveRight) * walkSpeed;
     }
 
-    // Gentle, reassuring forward-crossing pull while the kind stranger holds your hand across the zebra crossing!
+    // Gentle, reassuring forward-crossing pull while the kind stranger leads you across the zebra crossing!
     if (this.escortAssistActive) {
-      const guidePullX = (0.18 - this.position.x) * 0.55;
+      const guidePullX = (WAYPOINTS.crosswalkCenterX - 0.12 - this.position.x) * 0.55;
       const guidePullZ = -0.82;
       desiredVx = desiredVx * 0.4 + guidePullX;
       desiredVz = Math.min(desiredVz, guidePullZ);

@@ -13,6 +13,8 @@ export class PlanarReflectionPass {
   private virtualCamera = new THREE.PerspectiveCamera();
   private planeY = 0.08;
   private clipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.08);
+  private clipPlanesArr: THREE.Plane[] = [this.clipPlane];
+  private prevVisCache: boolean[] = [];
   private lookTarget = new THREE.Vector3();
   private upVec = new THREE.Vector3();
   private biasMatrix = new THREE.Matrix4().set(
@@ -76,9 +78,15 @@ export class PlanarReflectionPass {
     this.textureMatrix.multiply(this.virtualCamera.projectionMatrix);
     this.textureMatrix.multiply(this.virtualCamera.matrixWorldInverse);
 
-    // Hide reflective ground & first-person cane during reflection capture
-    const prevVis = hiddenObjects.map((o) => o.visible);
-    for (const o of hiddenObjects) o.visible = false;
+    // Hide reflective ground & first-person cane during reflection capture (reuse cache array to avoid GC)
+    const count = hiddenObjects.length;
+    if (this.prevVisCache.length < count) {
+      this.prevVisCache.length = count;
+    }
+    for (let i = 0; i < count; i++) {
+      this.prevVisCache[i] = hiddenObjects[i].visible;
+      hiddenObjects[i].visible = false;
+    }
 
     const prevTarget = renderer.getRenderTarget();
     const prevClipping = renderer.localClippingEnabled;
@@ -87,7 +95,7 @@ export class PlanarReflectionPass {
 
     // Clip geometry below ground plane so mirrored camera only captures above-ground scene
     renderer.localClippingEnabled = true;
-    renderer.clippingPlanes = [this.clipPlane];
+    renderer.clippingPlanes = this.clipPlanesArr;
     renderer.shadowMap.autoUpdate = false;
 
     renderer.setRenderTarget(this.renderTarget);
@@ -99,8 +107,8 @@ export class PlanarReflectionPass {
     renderer.clippingPlanes = prevPlanes;
     renderer.shadowMap.autoUpdate = prevShadowAuto;
 
-    for (let i = 0; i < hiddenObjects.length; i++) {
-      hiddenObjects[i].visible = prevVis[i];
+    for (let i = 0; i < count; i++) {
+      hiddenObjects[i].visible = this.prevVisCache[i];
     }
   }
 

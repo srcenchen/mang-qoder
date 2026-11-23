@@ -52,11 +52,14 @@ export interface LevelWaypoints {
   canePickupPos: { x: number; y: number; z: number };
   foyerDoorZ: number;
   firstTactileZ: number;
+  turn1Pos: { x: number; z: number };
   bikesCenter: { x: number; z: number };
   barrierCenter: { x: number; z: number };
+  turn2Pos: { x: number; z: number };
   stallLightPos: { x: number; y: number; z: number };
   catPos: { x: number; y: number; z: number };
   signalPolePos: { x: number; y: number; z: number };
+  crosswalkCenterX: number;
   crosswalkPromptZ: number;
   crosswalkCurbZ: number;
   crosswalkHalfWidth: number;
@@ -67,22 +70,48 @@ export interface LevelWaypoints {
 export const PLAYER_EYE_HEIGHT = 1.6;
 export const PLAYER_RADIUS = 0.32;
 
+/**
+ * Z-shaped real urban street corridor:
+ * - Foyer (X=0, Z=+1.5 -> -5.5) -> entry blister-dot pad
+ * - Leg 1 (-Z straight 9.6m along X=0) -> Turn #1 blister-dot pad at (0, -15.6) -> turn 90° RIGHT (+X)
+ * - Leg 2 (+X 14.0m along Z=-15.6) -> shared bikes at (4.8, -15.6) -> construction barrier at (9.2, -15.6)
+ *         -> Turn #2 blister-dot pad at (14.0, -15.6) -> turn 90° LEFT (-Z)
+ * - Leg 3 (-Z 13.8m along X=14.0) -> warm breakfast stall & tabby cat on left -> crosswalk dot pad at (14.0, -29.32)
+ *         -> zebra crosswalk -> opposite safe curb & golden sunset finale at Z <= -40.4
+ */
 export const WAYPOINTS: LevelWaypoints = {
   playerStart: { x: 0, y: PLAYER_EYE_HEIGHT, z: 1.5 },
   canePickupPos: { x: 1.62, y: 0.0, z: -2.35 },
   foyerDoorZ: -5.5,
   firstTactileZ: -6.4,
-  bikesCenter: { x: 0.05, z: -13.5 },
-  barrierCenter: { x: 0.0, z: -21.5 },
-  stallLightPos: { x: -2.45, y: 2.25, z: -24.6 },
-  catPos: { x: -0.92, y: 0.08, z: -24.6 },
-  signalPolePos: { x: 1.55, y: 0.08, z: -31.75 },
-  crosswalkPromptZ: -31.5,
-  crosswalkCurbZ: -32.18,
-  crosswalkHalfWidth: 1.8,
-  pedestrianPos: { x: 0.0, y: 0.08, z: -43.2 },
-  sunsetFinishZ: -43.0,
+  turn1Pos: { x: 0.0, z: -15.6 },
+  bikesCenter: { x: 4.8, z: -15.6 },
+  barrierCenter: { x: 9.2, z: -15.6 },
+  turn2Pos: { x: 14.0, z: -15.6 },
+  stallLightPos: { x: 11.55, y: 2.25, z: -23.6 },
+  catPos: { x: 13.08, y: 0.08, z: -23.6 },
+  signalPolePos: { x: 15.55, y: 0.08, z: -29.25 },
+  crosswalkCenterX: 14.0,
+  crosswalkPromptZ: -28.85,
+  crosswalkCurbZ: -29.68,
+  crosswalkHalfWidth: 1.85,
+  pedestrianPos: { x: 14.0, y: 0.08, z: -40.7 },
+  sunsetFinishZ: -40.4,
 };
+
+export function isOnTactilePath(x: number, z: number): boolean {
+  // Entry dot pad + Leg 1 (-Z along X=0)
+  if (z <= -5.6 && z >= -16.1 && Math.abs(x) < 0.52) return true;
+  // Leg 2 (+X along Z=-15.6)
+  if (x >= -0.48 && x <= 14.5 && Math.abs(z - -15.6) < 0.52) return true;
+  // Leg 3 (-Z along X=14.0)
+  if (z <= -15.1 && z >= -29.75 && Math.abs(x - 14.0) < 0.52) return true;
+  // Wide crosswalk stop dot pad
+  if (z <= -28.8 && z >= -29.82 && Math.abs(x - 14.0) < 1.85) return true;
+  // Opposite curb dot pad & continuation
+  if (z <= -39.8 && z >= -43.8 && Math.abs(x - 14.0) < 1.85) return true;
+  return false;
+}
 
 export function createInitialBeacons(): AcousticBeacon[] {
   return [
@@ -107,12 +136,22 @@ export function createInitialBeacons(): AcousticBeacon[] {
       active: false,
     },
     {
+      id: 'turn1_corner',
+      label: '街角转向砖',
+      x: WAYPOINTS.turn1Pos.x,
+      y: 0.3,
+      z: WAYPOINTS.turn1Pos.z,
+      color: 'amber',
+      radius: 10,
+      active: true,
+    },
+    {
       id: 'barrier_beacon',
       label: '施工警示灯',
-      x: 0,
+      x: WAYPOINTS.barrierCenter.x,
       y: 1.15,
-      z: -21.5,
-      color: 'alarm',
+      z: WAYPOINTS.barrierCenter.z,
+      color: 'amber',
       radius: 11,
       active: true,
     },
@@ -139,11 +178,11 @@ export function createInitialBeacons(): AcousticBeacon[] {
     {
       id: 'crosswalk_traffic',
       label: '路口车流',
-      x: 0,
+      x: WAYPOINTS.crosswalkCenterX,
       y: 0.8,
-      z: -36.5,
-      color: 'alarm',
-      radius: 14,
+      z: -34.0,
+      color: 'amber',
+      radius: 15,
       active: true,
     },
     {
@@ -165,9 +204,9 @@ export function createInitialMicroInteractions(): MicroInteraction[] {
       id: 'bike_report',
       promptText: '标记违停占道点 [E]',
       brailleHint: '⠍⠁⠗⠅ ⠃⠊⠅⠑',
-      x: 0.05,
-      z: -13.5,
-      radius: 2.35,
+      x: WAYPOINTS.bikesCenter.x,
+      z: WAYPOINTS.bikesCenter.z,
+      radius: 2.45,
       completed: false,
       unlocked: true,
     },
@@ -177,7 +216,7 @@ export function createInitialMicroInteractions(): MicroInteraction[] {
       brailleHint: '⠏⠑⠞ ⠉⠁⠞',
       x: WAYPOINTS.catPos.x,
       z: WAYPOINTS.catPos.z,
-      radius: 2.2,
+      radius: 2.25,
       completed: false,
       unlocked: true,
     },
@@ -187,7 +226,7 @@ export function createInitialMicroInteractions(): MicroInteraction[] {
       brailleHint: '⠉⠓⠑⠉⠅ ⠏⠕⠇⠑',
       x: WAYPOINTS.signalPolePos.x,
       z: WAYPOINTS.signalPolePos.z,
-      radius: 1.95,
+      radius: 2.0,
       completed: false,
       unlocked: true,
     },
@@ -239,7 +278,7 @@ export function createInitialColliders(): ColliderBox[] {
     },
     {
       id: 'foyer_door_jamb_left',
-      minX: -4.6,
+      minX: -4.2,
       maxX: -0.64,
       minZ: -5.68,
       maxZ: -5.36,
@@ -250,7 +289,7 @@ export function createInitialColliders(): ColliderBox[] {
     {
       id: 'foyer_door_jamb_right',
       minX: 0.64,
-      maxX: 4.6,
+      maxX: 3.1,
       minZ: -5.68,
       maxZ: -5.36,
       height: 2.8,
@@ -268,149 +307,211 @@ export function createInitialColliders(): ColliderBox[] {
       enabled: true,
     },
 
-    // === Street Outer Corridor Bounds ===
+    // === Z-Turn Street Outer Boundaries (Zero wall clipping, >= 1.68m bypass lanes) ===
+    // Leg 1 West Building Facade (X = -3.85, Z = -5.4 to -18.5)
     {
-      id: 'street_left_wall',
-      minX: -4.65,
-      maxX: -4.22,
-      minZ: -45.5,
-      maxZ: -5.5,
-      height: 4.5,
+      id: 'leg1_west_wall',
+      minX: -4.4,
+      maxX: -3.85,
+      minZ: -18.6,
+      maxZ: -5.4,
+      height: 6.0,
       tag: 'wall',
       enabled: true,
     },
+    // Leg 1 East Sidewalk Guardrail (stops at Z = -12.6 to open smoothly into Leg 2!)
     {
-      id: 'street_right_boundary',
-      minX: 3.35,
-      maxX: 3.75,
-      minZ: -45.5,
-      maxZ: -5.5,
+      id: 'leg1_east_guardrail',
+      minX: 2.55,
+      maxX: 2.95,
+      minZ: -12.6,
+      maxZ: -5.4,
       height: 1.2,
       tag: 'wall',
       enabled: true,
     },
+    // Leg 2 North Building Facade (Z = -18.2, X = -4.2 to +9.85 — forms Corner #1 & Corner #2!)
+    {
+      id: 'leg2_north_wall',
+      minX: -4.2,
+      maxX: 9.85,
+      minZ: -18.65,
+      maxZ: -18.2,
+      height: 6.0,
+      tag: 'wall',
+      enabled: true,
+    },
+    // Leg 2 South Sidewalk Guardrail (Z = -12.6, X = 2.55 to 17.05)
+    {
+      id: 'leg2_south_guardrail',
+      minX: 2.55,
+      maxX: 17.05,
+      minZ: -12.6,
+      maxZ: -12.2,
+      height: 1.2,
+      tag: 'wall',
+      enabled: true,
+    },
+    // Leg 3 West Building Facade (X = 9.85, Z = -18.2 to -30.0)
+    {
+      id: 'leg3_west_wall',
+      minX: 9.35,
+      maxX: 9.85,
+      minZ: -30.0,
+      maxZ: -18.2,
+      height: 6.0,
+      tag: 'wall',
+      enabled: true,
+    },
+    // Leg 3 West Crosswalk & Plaza Bound (X = 9.85, Z = -30.0 to -44.2)
+    {
+      id: 'leg3_west_crosswalk_bound',
+      minX: 9.35,
+      maxX: 9.85,
+      minZ: -44.2,
+      maxZ: -30.0,
+      height: 1.4,
+      tag: 'wall',
+      enabled: true,
+    },
+    // Leg 3 East Guardrail & Crosswalk East Bound (X = 16.65, Z = -12.2 to -44.2)
+    {
+      id: 'leg3_east_guardrail',
+      minX: 16.65,
+      maxX: 17.05,
+      minZ: -44.2,
+      maxZ: -12.2,
+      height: 1.4,
+      tag: 'wall',
+      enabled: true,
+    },
+    // Opposite Safe Sidewalk Far End Boundary
     {
       id: 'street_end_boundary',
-      minX: -4.65,
-      maxX: 4.65,
-      minZ: -45.6,
-      maxZ: -45.1,
+      minX: 9.35,
+      maxX: 17.1,
+      minZ: -44.3,
+      maxZ: -43.8,
       height: 2.0,
       tag: 'wall',
       enabled: true,
     },
 
-    // === Scene 2: Occupied Tactile Path Obstacles ===
+    // === Scene 2 (Leg 2): Occupied Tactile Path Obstacles ===
+    // 2 Shared Bikes across X = 4.8, Z = -15.6 (North gap 1.78m, South gap 2.18m!)
     {
       id: 'shared_bikes',
-      minX: -0.88,
-      maxX: 0.92,
-      minZ: -14.2,
-      maxZ: -12.8,
+      minX: 4.1,
+      maxX: 5.5,
+      minZ: -16.42,
+      maxZ: -14.78,
       height: 1.12,
       tag: 'bike',
       isObstacle: true,
       enabled: true,
     },
+    // Construction Barrier across X = 9.2, Z = -15.6 (North gap 1.68m, South gap 2.08m!)
     {
       id: 'construction_barrier',
-      minX: -1.05,
-      maxX: 1.05,
-      minZ: -21.92,
-      maxZ: -21.08,
+      minX: 8.8,
+      maxX: 9.6,
+      minZ: -16.52,
+      maxZ: -14.68,
       height: 1.15,
       tag: 'barrier',
       isObstacle: true,
       enabled: true,
     },
+
+    // Streetlamp Poles (tucked near curbs so never blocking tactile path or bypass corridors)
     {
       id: 'street_lamp_1',
-      minX: 1.48,
-      maxX: 1.76,
-      minZ: -16.95,
-      maxZ: -16.65,
+      minX: 2.1,
+      maxX: 2.4,
+      minZ: -10.35,
+      maxZ: -10.05,
       height: 4.2,
       tag: 'normal',
       enabled: true,
     },
     {
       id: 'street_lamp_2',
-      minX: 1.48,
-      maxX: 1.76,
-      minZ: -28.35,
-      maxZ: -28.05,
+      minX: 6.85,
+      maxX: 7.15,
+      minZ: -13.15,
+      maxZ: -12.85,
+      height: 4.2,
+      tag: 'normal',
+      enabled: true,
+    },
+    {
+      id: 'street_lamp_3',
+      minX: 16.0,
+      maxX: 16.3,
+      minZ: -20.65,
+      maxZ: -20.35,
+      height: 4.2,
+      tag: 'normal',
+      enabled: true,
+    },
+    {
+      id: 'street_lamp_4',
+      minX: 16.0,
+      maxX: 16.3,
+      minZ: -26.85,
+      maxZ: -26.55,
       height: 4.2,
       tag: 'normal',
       enabled: true,
     },
     {
       id: 'crosswalk_signal_pole',
-      minX: 1.4,
-      maxX: 1.7,
-      minZ: -31.9,
-      maxZ: -31.6,
+      minX: 15.4,
+      maxX: 15.7,
+      minZ: -29.4,
+      maxZ: -29.1,
       height: 3.4,
       tag: 'signal_pole',
       enabled: true,
     },
-    {
-      id: 'tree_pit_1',
-      minX: 2.45,
-      maxX: 3.05,
-      minZ: -10.5,
-      maxZ: -9.9,
-      height: 3.2,
-      tag: 'normal',
-      enabled: true,
-    },
-    {
-      id: 'tree_pit_2',
-      minX: 2.45,
-      maxX: 3.05,
-      minZ: -18.9,
-      maxZ: -18.3,
-      height: 3.2,
-      tag: 'normal',
-      enabled: true,
-    },
 
-    // === Scene 3: Warm Breakfast Stall & Cat ===
+    // === Scene 3 (Leg 3): Warm Breakfast Stall & Tabby Cat ===
     {
       id: 'breakfast_stall_counter',
-      minX: -4.25,
-      maxX: -2.18,
-      minZ: -26.3,
-      maxZ: -22.9,
+      minX: 9.85,
+      maxX: 11.82,
+      minZ: -25.3,
+      maxZ: -21.9,
       height: 2.4,
       tag: 'stall',
       enabled: true,
     },
     {
       id: 'stall_stool_1',
-      minX: -2.08,
-      maxX: -1.68,
-      minZ: -24.25,
-      maxZ: -23.85,
+      minX: 11.92,
+      maxX: 12.32,
+      minZ: -23.25,
+      maxZ: -22.85,
       height: 0.48,
       tag: 'stall',
       enabled: true,
     },
     {
       id: 'stall_stool_2',
-      minX: -2.08,
-      maxX: -1.68,
-      minZ: -25.35,
-      maxZ: -24.95,
+      minX: 11.92,
+      maxX: 12.32,
+      minZ: -24.35,
+      maxZ: -23.95,
       height: 0.48,
       tag: 'stall',
       enabled: true,
     },
     {
       id: 'street_cat',
-      minX: -1.14,
-      maxX: -0.7,
-      minZ: -24.82,
-      maxZ: -24.38,
+      minX: 12.86,
+      maxX: 13.3,
+      minZ: -23.82,
+      maxZ: -23.38,
       height: 0.42,
       tag: 'cat',
       enabled: true,
@@ -419,9 +520,9 @@ export function createInitialColliders(): ColliderBox[] {
     // === Scene 4: Crosswalk Safety Air-Wall (Thick 1.2m so player stops cleanly on dot bricks!) ===
     {
       id: 'crosswalk_airwall',
-      minX: -4.6,
-      maxX: 4.6,
-      minZ: -33.4,
+      minX: 9.4,
+      maxX: 18.6,
+      minZ: -30.9,
       maxZ: WAYPOINTS.crosswalkCurbZ,
       height: 1.8,
       tag: 'tactile_dot',

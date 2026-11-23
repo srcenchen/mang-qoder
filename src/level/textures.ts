@@ -114,32 +114,32 @@ function mulberry32(seed: number): () => number {
 export function createProceduralTextures(): ProceduralTextureSet {
   const rand = mulberry32(20261130);
 
-  // 1. Matte Dark Grey Interior Foyer Tile
+  // 1. Matte Dark Grey Interior Foyer Tile (512px PBR)
   const createInteriorTile = (): PBRMapGroup => {
-    const size = 256;
+    const size = 512;
     const [cCol, col] = makeCanvas(size, size);
     const [cH, hCtx] = makeCanvas(size, size);
     const [cR, rCtx] = makeCanvas(size, size);
 
-    col.fillStyle = '#30343c';
+    col.fillStyle = '#2d3138';
     col.fillRect(0, 0, size, size);
     hCtx.fillStyle = '#dcdcdc';
     hCtx.fillRect(0, 0, size, size);
     rCtx.fillStyle = '#a8a8a8';
     rCtx.fillRect(0, 0, size, size);
 
-    for (let i = 0; i < 1000; i++) {
+    for (let i = 0; i < 2400; i++) {
       const x = rand() * size;
       const y = rand() * size;
-      const r = 2 + rand() * 14;
-      const v = Math.floor(38 + rand() * 26);
-      col.fillStyle = `rgba(${v},${v + 2},${v + 5},0.16)`;
+      const r = 2 + rand() * 18;
+      const v = Math.floor(34 + rand() * 28);
+      col.fillStyle = `rgba(${v},${v + 2},${v + 5},0.14)`;
       col.beginPath();
       col.arc(x, y, r, 0, Math.PI * 2);
       col.fill();
 
-      const rv = Math.floor(135 + rand() * 80);
-      rCtx.fillStyle = `rgba(${rv},${rv},${rv},0.22)`;
+      const rv = Math.floor(130 + rand() * 85);
+      rCtx.fillStyle = `rgba(${rv},${rv},${rv},0.20)`;
       rCtx.fillRect(x, y, r, r * 0.6);
     }
 
@@ -155,9 +155,9 @@ export function createProceduralTextures(): ProceduralTextureSet {
         ctx.stroke();
       }
     };
-    drawSeams(col, '#16191e', 4);
-    drawSeams(hCtx, '#202020', 5);
-    drawSeams(rCtx, '#f2f2f2', 5);
+    drawSeams(col, '#14171c', 5);
+    drawSeams(hCtx, '#1c1c1c', 6);
+    drawSeams(rCtx, '#f2f2f2', 6);
 
     return {
       map: toTexture(cCol, true, 3, 6),
@@ -166,93 +166,124 @@ export function createProceduralTextures(): ProceduralTextureSet {
     };
   };
 
-  // 2. Mottled Aged Plaster Wall
+  // 2. Mottled Aged Plaster Wall (512px PBR)
   const createPlasterWall = (): PBRMapGroup => {
-    const size = 256;
+    const size = 512;
     const [cCol, col] = makeCanvas(size, size);
     const [cH, hCtx] = makeCanvas(size, size);
+    const [cR, rCtx] = makeCanvas(size, size);
 
-    col.fillStyle = '#5a5e66';
+    col.fillStyle = '#555961';
     col.fillRect(0, 0, size, size);
     hCtx.fillStyle = '#808080';
     hCtx.fillRect(0, 0, size, size);
+    rCtx.fillStyle = '#cfcfcf';
+    rCtx.fillRect(0, 0, size, size);
 
-    for (let i = 0; i < 1400; i++) {
+    for (let i = 0; i < 3200; i++) {
       const x = rand() * size;
       const y = rand() * size;
-      const r = 3 + rand() * 24;
-      const shade = Math.floor(66 + rand() * 44);
-      col.fillStyle = `rgba(${shade},${shade + 1},${shade + 3},0.12)`;
+      const r = 3 + rand() * 28;
+      const shade = Math.floor(62 + rand() * 42);
+      col.fillStyle = `rgba(${shade},${shade + 1},${shade + 3},0.10)`;
       col.beginPath();
       col.arc(x, y, r, 0, Math.PI * 2);
       col.fill();
-      const b = Math.floor(100 + rand() * 60);
-      hCtx.fillStyle = `rgba(${b},${b},${b},0.22)`;
+      const b = Math.floor(96 + rand() * 64);
+      hCtx.fillStyle = `rgba(${b},${b},${b},0.18)`;
       hCtx.fillRect(x, y, r * 0.4, r * 0.4);
+      const rv = Math.floor(170 + rand() * 60);
+      rCtx.fillStyle = `rgba(${rv},${rv},${rv},0.16)`;
+      rCtx.fillRect(x, y, r * 0.5, r * 0.5);
     }
 
     const grad = col.createLinearGradient(0, size * 0.72, 0, size);
     grad.addColorStop(0, 'rgba(18,20,24,0)');
-    grad.addColorStop(1, 'rgba(18,20,24,0.52)');
+    grad.addColorStop(1, 'rgba(18,20,24,0.56)');
     col.fillStyle = grad;
     col.fillRect(0, size * 0.72, size, size * 0.28);
 
     return {
       map: toTexture(cCol, true, 2, 1),
       normalMap: heightToNormalTexture(cH, 1.8, 2, 1),
+      roughnessMap: toTexture(cR, false, 2, 1),
     };
   };
 
-  // 3. Weathered Urban Brick Wall
+  // 3. Weathered Urban Brick Wall (Fine 512px 16x8 scale — realistic dark-red/umber masonry + damp base stains!)
   const createBrickWall = (): PBRMapGroup => {
-    const size = 256;
+    const size = 512;
     const [cCol, col] = makeCanvas(size, size);
     const [cH, hCtx] = makeCanvas(size, size);
+    const [cR, rCtx] = makeCanvas(size, size);
 
-    col.fillStyle = '#262321';
+    col.fillStyle = '#201c1a';
     col.fillRect(0, 0, size, size);
-    hCtx.fillStyle = '#282828';
+    hCtx.fillStyle = '#242424';
     hCtx.fillRect(0, 0, size, size);
+    rCtx.fillStyle = '#dcdcdc';
+    rCtx.fillRect(0, 0, size, size);
 
-    const rows = 8;
-    const cols = 4;
+    const rows = 16;
+    const cols = 8;
     const rowH = size / rows;
     const colW = size / cols;
 
     for (let r = 0; r < rows; r++) {
       const offset = (r % 2) * (colW * 0.5);
       for (let c = -1; c <= cols; c++) {
-        const bx = c * colW + offset + 2.5;
-        const by = r * rowH + 2.5;
-        const bw = colW - 5;
-        const bh = rowH - 5;
+        const bx = c * colW + offset + 2;
+        const by = r * rowH + 2;
+        const bw = colW - 4;
+        const bh = rowH - 4;
 
-        const baseR = 96 + Math.floor(rand() * 38);
-        const baseG = 70 + Math.floor(rand() * 26);
-        const baseB = 58 + Math.floor(rand() * 20);
+        const tone = rand();
+        const baseR = 68 + Math.floor(tone * 36 + rand() * 14);
+        const baseG = 46 + Math.floor(tone * 24 + rand() * 10);
+        const baseB = 38 + Math.floor(tone * 18 + rand() * 8);
         col.fillStyle = `rgb(${baseR},${baseG},${baseB})`;
         col.fillRect(bx, by, bw, bh);
 
-        const hv = 195 + Math.floor(rand() * 45);
+        // Micro brick surface grain
+        col.fillStyle = `rgba(18,14,12,${0.08 + rand() * 0.16})`;
+        col.fillRect(bx + 2, by + bh * 0.55, bw - 4, bh * 0.45);
+
+        const hv = 175 + Math.floor(rand() * 55);
         hCtx.fillStyle = `rgb(${hv},${hv},${hv})`;
         hCtx.fillRect(bx, by, bw, bh);
+
+        const rv = 155 + Math.floor(rand() * 65);
+        rCtx.fillStyle = `rgb(${rv},${rv},${rv})`;
+        rCtx.fillRect(bx, by, bw, bh);
       }
     }
 
-    // Damp rain streaks from top
-    for (let i = 0; i < 36; i++) {
+    // Damp rain streaks from top & mossy water-stain gradient along base
+    for (let i = 0; i < 65; i++) {
       const sx = rand() * size;
-      const sh = 40 + rand() * 140;
+      const sh = 60 + rand() * 220;
       const g = col.createLinearGradient(sx, 0, sx, sh);
-      g.addColorStop(0, 'rgba(12,14,18,0.42)');
-      g.addColorStop(1, 'rgba(12,14,18,0)');
+      g.addColorStop(0, 'rgba(10,12,15,0.48)');
+      g.addColorStop(1, 'rgba(10,12,15,0)');
       col.fillStyle = g;
-      col.fillRect(sx, 0, 4 + rand() * 8, sh);
+      col.fillRect(sx, 0, 3 + rand() * 7, sh);
     }
+    const baseStain = col.createLinearGradient(0, size * 0.68, 0, size);
+    baseStain.addColorStop(0, 'rgba(14,16,14,0)');
+    baseStain.addColorStop(1, 'rgba(12,15,13,0.62)');
+    col.fillStyle = baseStain;
+    col.fillRect(0, size * 0.68, size, size * 0.32);
+
+    const baseWet = rCtx.createLinearGradient(0, size * 0.68, 0, size);
+    baseWet.addColorStop(0, 'rgba(70,70,70,0)');
+    baseWet.addColorStop(1, 'rgba(55,55,55,0.85)');
+    rCtx.fillStyle = baseWet;
+    rCtx.fillRect(0, size * 0.68, size, size * 0.32);
 
     return {
-      map: toTexture(cCol, true, 6, 2),
-      normalMap: heightToNormalTexture(cH, 2.8, 6, 2),
+      map: toTexture(cCol, true, 4, 2),
+      normalMap: heightToNormalTexture(cH, 2.6, 4, 2),
+      roughnessMap: toTexture(cR, false, 4, 2),
     };
   };
 
@@ -454,9 +485,9 @@ export function createProceduralTextures(): ProceduralTextureSet {
     }
 
     return {
-      map: toTexture(cCol, true, 1, 56),
-      normalMap: heightToNormalTexture(cH, 3.4, 1, 56),
-      roughnessMap: toTexture(cR, false, 1, 56),
+      map: toTexture(cCol, true, 1, 20),
+      normalMap: heightToNormalTexture(cH, 3.4, 1, 20),
+      roughnessMap: toTexture(cR, false, 1, 20),
     };
   };
 
@@ -522,9 +553,9 @@ export function createProceduralTextures(): ProceduralTextureSet {
     }
 
     return {
-      map: toTexture(cCol, true, 7, 2),
-      normalMap: heightToNormalTexture(cH, 3.6, 7, 2),
-      roughnessMap: toTexture(cR, false, 7, 2),
+      map: toTexture(cCol, true, 2, 2),
+      normalMap: heightToNormalTexture(cH, 3.6, 2, 2),
+      roughnessMap: toTexture(cR, false, 2, 2),
     };
   };
 
