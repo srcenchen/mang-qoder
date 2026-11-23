@@ -14,6 +14,7 @@ import { SpatialSoundEngine } from '../audio/soundEngine';
 import { AccessibilityUI } from '../ui/accessibilityUI';
 
 export interface StoryCallbacks {
+  getPlayerPosition: () => THREE.Vector3;
   onEquipCane: () => void;
   onCollidersUpdated: () => void;
   onImpactPulse: () => void;
@@ -25,6 +26,12 @@ export interface StoryCallbacks {
     memoriesTotal: number
   ) => void;
 }
+
+const HELP_PROMPTS = [
+  '呼喊求助 [E]',
+  '再次呼喊求助 [E] (1/3)',
+  '鼓起勇气再喊一次 [E] (2/3)',
+];
 
 export class StoryScriptManager {
   public hasCane = false;
@@ -60,7 +67,6 @@ export class StoryScriptManager {
 
   private playElapsed = 0;
   private running = false;
-  private activeMicro: MicroInteraction | null = null;
 
   private colliders: ColliderBox[];
   private builtScene: BuiltSceneResult;
@@ -125,6 +131,7 @@ export class StoryScriptManager {
   }
 
   public reset(): void {
+    this.running = false;
     this.hasCane = false;
     this.doorOpened = false;
     this.obstacleBumps = 0;
@@ -148,7 +155,6 @@ export class StoryScriptManager {
     this.foyerReminderTimer = 0;
     this.playElapsed = 0;
     this.helpCooldown = 0;
-    this.activeMicro = null;
 
     this.beacons = createInitialBeacons();
     this.microInteractions = createInitialMicroInteractions();
@@ -169,12 +175,12 @@ export class StoryScriptManager {
     this.builtScene.sunsetDirLight.intensity = 0.25;
     this.builtScene.setPedestrianSignalGreen(false);
 
-    this.ctxWrap.classList.add('hidden');
+    this.showContextPrompt(null);
     this.callbacks.onCollidersUpdated();
   }
 
   public onObstacleCollision(col: ColliderBox): void {
-    this.obstacleBumps += 1;
+    if (this.running && !this.endingTriggered) this.obstacleBumps += 1;
     this.soundEngine.playCollisionBump(col.tag);
     this.callbacks.onImpactPulse();
 
@@ -224,7 +230,9 @@ export class StoryScriptManager {
   public onAirwallBlocked(): void {
     if (!this.strangerArrived) {
       this.a11yUI.showSubtitle(
-        '面前车流疾驰，没有过街提示音……请点击「呼喊求助」或按 E 键向路人求助。',
+        this.canRequestHelp(this.callbacks.getPlayerPosition())
+          ? '面前车流疾驰，没有过街提示音……请点击「呼喊求助」或按 E 键向路人求助。'
+          : '面前车流疾驰……请先沿路边找到斑马线前的圆点提示砖。',
         5200,
         '路口警示'
       );
@@ -236,25 +244,21 @@ export class StoryScriptManager {
    * Handles Crosswalk Call For Help (Node 05) OR nearby optional urban micro-interaction!
    */
   public handleContextAction(): void {
-    if (!this.running) return;
-
-    // Priority 1: Crosswalk Call For Help when on warning bricks
-    if (this.crosswalkEntered && !this.strangerArrived) {
+    const action = this.getContextAction(this.callbacks.getPlayerPosition());
+    if (action === 'help') {
       this.handleHelpPress();
-      return;
-    }
-
-    // Priority 2: Nearby optional micro-interaction
-    if (this.activeMicro && !this.activeMicro.completed) {
-      this.completeMicroInteraction(this.activeMicro.id);
+    } else if (action) {
+      this.completeMicroInteraction(action.id);
     }
   }
 
   private completeMicroInteraction(id: MicroInteraction['id']): void {
+    if (!this.running || this.endingTriggered) return;
     const item = this.microInteractions.find((m) => m.id === id);
     if (!item || item.completed) return;
 
     item.completed = true;
+    this.showContextPrompt(this.getContextAction(this.callbacks.getPlayerPosition()));
     const count = this.getMemoriesFound();
     this.a11yUI.setMemoryCount(count, this.microInteractions.length);
     this.soundEngine.playDiscoveryChime();
@@ -312,15 +316,15 @@ export class StoryScriptManager {
     }
   }
 
-  public handleHelpPress(): void {
-    if (!this.crosswalkEntered || this.strangerArrived || this.helpCooldown > 0) return;
+  private handleHelpPress(): void {
+    if (this.helpCooldown > 0) return;
 
     this.helpPressCount += 1;
     this.helpCooldown = 1.35;
+    this.showContextPrompt(this.helpPressCount < HELP_PROMPTS.length ? 'help' : null);
 
     if (this.helpPressCount === 1) {
       this.spawnTrafficBurst(1, 1.35);
-      this.ctxLabel.textContent = '再次呼喊求助 [E] (1/3)';
       this.a11yUI.showSubtitle(
         '“请问有人在旁边吗——” 雨夜呼啸而过的车流淹没了声音，无人应答。',
         5200,
@@ -328,7 +332,6 @@ export class StoryScriptManager {
       );
     } else if (this.helpPressCount === 2) {
       this.spawnTrafficBurst(-1, 1.35);
-      this.ctxLabel.textContent = '鼓起勇气再喊一次 [E] (2/3)';
       this.a11yUI.showSubtitle(
         '“能帮我看一下红绿灯吗？” 雨伞擦肩而过，四周依然一片喧嚣……再试一次吧。',
         5200,
@@ -339,7 +342,6 @@ export class StoryScriptManager {
       this.escortPhase = 'approaching';
       this.escortHoldingBlend = 0;
       this.escortStridePhase = 0;
-      this.ctxWrap.classList.add('hidden');
       this.soundEngine.playWarmStrangerChime();
 
       // Switch 3D pedestrian signal lamp from RED to EMERALD GREEN!
@@ -438,39 +440,42 @@ export class StoryScriptManager {
     }
   }
 
-  private updateContextPrompt(playerPos: THREE.Vector3): void {
-    if (this.crosswalkEntered && !this.strangerArrived) {
-      this.ctxWrap.classList.remove('hidden');
-      this.ctxBraille.textContent = '⠠⠓⠑⠇⠏ · ⠟⠊⠥ 助';
-      if (this.helpPressCount === 0) {
-        this.ctxLabel.textContent = '呼喊求助 [E]';
-      }
-      return;
+  private canRequestHelp(playerPos: THREE.Vector3): boolean {
+    return this.running && this.hasCane && !this.endingTriggered && !this.strangerArrived &&
+      this.helpPressCount < HELP_PROMPTS.length &&
+      Math.abs(playerPos.x) <= WAYPOINTS.crosswalkHalfWidth &&
+      playerPos.z >= WAYPOINTS.crosswalkCurbZ && playerPos.z <= WAYPOINTS.crosswalkPromptZ;
+  }
+
+  private getContextAction(playerPos: THREE.Vector3): 'help' | MicroInteraction | null {
+    if (this.canRequestHelp(playerPos)) return 'help';
+    if (!this.running || !this.hasCane || this.endingTriggered || this.escortPhase !== 'none') {
+      return null;
     }
 
-    // Check optional micro-interactions (only after cane is equipped)
-    if (this.hasCane && !this.endingTriggered) {
-      let nearest: MicroInteraction | null = null;
-      let bestDist = Infinity;
-      for (const m of this.microInteractions) {
-        if (m.completed) continue;
-        const d = Math.hypot(playerPos.x - m.x, playerPos.z - m.z);
-        if (d < m.radius && d < bestDist) {
-          bestDist = d;
-          nearest = m;
-        }
-      }
-      this.activeMicro = nearest;
-      if (nearest) {
-        this.ctxWrap.classList.remove('hidden');
-        this.ctxBraille.textContent = nearest.brailleHint;
-        this.ctxLabel.textContent = nearest.promptText;
-        return;
+    let nearest: MicroInteraction | null = null;
+    let bestDist = Infinity;
+    for (const item of this.microInteractions) {
+      if (item.completed || !item.unlocked) continue;
+      const distance = Math.hypot(playerPos.x - item.x, playerPos.z - item.z);
+      if (distance < item.radius && distance < bestDist) {
+        bestDist = distance;
+        nearest = item;
       }
     }
+    return nearest;
+  }
 
-    this.activeMicro = null;
-    this.ctxWrap.classList.add('hidden');
+  private showContextPrompt(action: 'help' | MicroInteraction | null): void {
+    const hidden = action === null;
+    const label = action === 'help' ? HELP_PROMPTS[this.helpPressCount] : action?.promptText ?? '';
+    const braille = action === 'help' ? '⠠⠓⠑⠇⠏ · ⠟⠊⠥ 助' : action?.brailleHint ?? '';
+    if (this.ctxWrap.hidden !== hidden) {
+      this.ctxWrap.hidden = hidden;
+      this.ctxBtn.disabled = hidden;
+    }
+    if (this.ctxLabel.textContent !== label) this.ctxLabel.textContent = label;
+    if (this.ctxBraille.textContent !== braille) this.ctxBraille.textContent = braille;
   }
 
   public update(
@@ -490,7 +495,7 @@ export class StoryScriptManager {
     }
 
     this.updateFocusListenRadar(dt, playerPos, isListening);
-    this.updateContextPrompt(playerPos);
+    this.showContextPrompt(this.getContextAction(playerPos));
 
     // --- NODE 01: Foyer Cane Pickup ---
     if (!this.hasCane) {
@@ -593,7 +598,7 @@ export class StoryScriptManager {
     }
 
     // --- NODE 05: Silent Crosswalk Warning Bricks ---
-    if (!this.crosswalkEntered && playerPos.z <= WAYPOINTS.crosswalkPromptZ) {
+    if (!this.crosswalkEntered && this.canRequestHelp(playerPos)) {
       this.crosswalkEntered = true;
       this.a11yUI.setActHeader(2);
       this.a11yUI.showLocationCard('中山路口 · 无声斑马线 · 19:45', '第二幕 · 听声辨位与善意微光');
@@ -725,6 +730,7 @@ export class StoryScriptManager {
     // --- NODE 06: Golden After-Rain Sunset Finale (Z <= -43.0, 2.5s Transition) ---
     if (!this.endingTriggered && playerPos.z <= WAYPOINTS.sunsetFinishZ) {
       this.endingTriggered = true;
+      this.showContextPrompt(null);
       this.escortPhase = 'arrived';
       this.callbacks.onEscortAssistChange(false);
       this.soundEngine.playWarmStrangerChime();

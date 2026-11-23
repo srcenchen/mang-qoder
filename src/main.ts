@@ -53,13 +53,7 @@ class BlindPathGameApp {
   private impactPulse = 0;
   private screenFade = 1.0;
 
-  private latestStats: PlaythroughStats = {
-    elapsedSeconds: 0,
-    caneTaps: 0,
-    obstacleBumps: 0,
-    memoriesFound: 0,
-    memoriesTotal: 3,
-  };
+  private latestStats: PlaythroughStats | null = null;
 
   // UI Elements
   private stageRoot = document.getElementById('stage-root')!;
@@ -222,6 +216,7 @@ class BlindPathGameApp {
       this.soundEngine,
       this.a11yUI,
       {
+        getPlayerPosition: () => this.controller.position,
         onEquipCane: () => {
           this.caneSystem.setEquipped(true);
           this.btnCaneTap.disabled = false;
@@ -467,6 +462,7 @@ class BlindPathGameApp {
 
     // Ending Modal & 9:16 Share Poster
     this.btnGeneratePoster.addEventListener('click', () => {
+      if (!this.latestStats) return;
       const dataUrl = generateEmpathySharePoster(this.latestStats);
       this.posterImg.src = dataUrl;
       this.btnDownloadPoster.href = dataUrl;
@@ -541,6 +537,8 @@ class BlindPathGameApp {
   private restartExperience(): void {
     this.endingModal.classList.add('hidden');
     this.btnReopenEnding.classList.add('hidden');
+    this.latestStats = null;
+    this.statBumps.textContent = '0';
 
     this.btnCaneTap.disabled = true;
     this.echoManager.reset();

@@ -26,19 +26,18 @@ export class SpatialSoundEngine {
       (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtx) return;
 
-    if (!this.ctx) {
-      this.ctx = new AudioCtx();
-      this.masterGain = this.ctx.createGain();
-      this.masterGain.gain.value = this.isMuted ? 0 : this.volume;
-      this.masterGain.connect(this.ctx.destination);
+    const ctx = (this.ctx ??= new AudioCtx());
+    void ctx.resume().catch(() => {});
 
-      this.noiseBuffer = this.createNoiseBuffer(this.ctx, 2.5);
+    if (!this.masterGain) {
+      this.masterGain = ctx.createGain();
+      this.masterGain.gain.value = this.isMuted ? 0 : this.volume;
+      this.masterGain.connect(ctx.destination);
+
+      this.noiseBuffer = this.createNoiseBuffer(ctx, 2.5);
       this.setupContinuousLoops();
     }
 
-    if (this.ctx.state === 'suspended') {
-      void this.ctx.resume();
-    }
     this.unlocked = true;
   }
 
