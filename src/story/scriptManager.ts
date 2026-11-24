@@ -5,7 +5,7 @@ import {
   createInitialBeacons,
   createInitialMicroInteractions,
   MicroInteraction,
-  SurfaceTag,
+  STREET, groundFeature, isNearPuddle, isOnTactilePath, streetX, streetZ, SurfaceTag,
   WAYPOINTS,
 } from '../level/levelData';
 import { BuiltSceneResult } from '../level/buildScene';
@@ -15,17 +15,21 @@ import { AccessibilityUI } from '../ui/accessibilityUI';
 
 export interface StoryCallbacks {
   getPlayerPosition: () => THREE.Vector3;
+  isTouchMode: () => boolean;
   onEquipCane: () => void;
   onCollidersUpdated: () => void;
   onImpactPulse: () => void;
   onEscortAssistChange: (active: boolean) => void;
-  onReachEnding: (
-    elapsedSeconds: number,
-    obstacleBumps: number,
-    memoriesFound: number,
-    memoriesTotal: number
-  ) => void;
+  onChapter: (chapter: number) => void;
+  onReachEnding: (seconds: number, bumps: number) => void;
 }
+
+type ContextAction = 'help' | 'board' | 'pickup' | 'door' | MicroInteraction | null;
+const TOUCH_VERBS: Record<MicroInteraction['id'], string> = {
+  bike_report: '标记',
+  pet_cat: '抚摸',
+  signal_pole: '触摸',
+};
 
 const HELP_PROMPTS = [
   '呼喊求助 [E]',
@@ -49,14 +53,14 @@ export class StoryScriptManager {
   private escortHoldingBlend = 0;
   private escortStridePhase = 0;
   private escortStepTimer = 0;
-  private lastEscortZ = -31.8;
+  private lastEscortZ = streetZ(-43.8);
 
   private steppedOnTactile = false;
   private turn1HintShown = false;
-  private turn2HintShown = false;
   private bikeHintShown = false;
   private barrierHintShown = false;
   private stallVisited = false;
+  private catGreeted = false;
   private crosswalkEntered = false;
   private endingModalShown = false;
   private foyerReminderTimer = 0;
@@ -64,7 +68,9 @@ export class StoryScriptManager {
 
   private trafficTimer = 0.8;
   private nextTrafficDir: 1 | -1 = 1;
-  private helpCooldown = 0;
+  private helpReadyAt = 0;
+  private puddleNearby = false;
+  private puddleProbeUntil = 0;
   private escortRippleTimer = 0;
 
   private playElapsed = 0;
@@ -74,6 +80,178 @@ export class StoryScriptManager {
   private targetPedHaloIntensity = 0;
   private targetDoorCrackIntensity = 1.4;
   private targetSunsetLightIntensity = 0.0;
+
+  public chapterOpen = false;
+  private chapter = 0;
+  private bus: 'away' | 'passing' | 'waiting' | 'boarding' | 'ridden' = 'away';
+  private busDeadline = 0;
+  private finishDeadline = 0;
+  private manholeFound = false;
+  private bikesPassed = false;
+  private gapPassed = false;
+  private railFound = false;
+  private ground: ReturnType<typeof groundFeature> = null;
+  private hint = document.getElementById('scene-hint')!;
+  private hintText = document.getElementById('scene-hint-text')!;
+
+  private setHint(text: string): void {
+    if (text && this.hintText.textContent !== text) this.hintText.textContent = text;
+    const visible = Boolean(text);
+    if (visible !== this.hint.classList.contains('on')) {
+      this.hint.classList.toggle('on', visible);
+      this.hint.setAttribute('aria-hidden', String(!visible));
+    }
+  }
+
+  private startChapter(number: number): void {
+    this.chapter = number;
+    this.chapterOpen = true;
+    this.setHint('');
+    this.showContextPrompt(null);
+    this.callbacks.onChapter(number);
+  }
+
+  public get hasRiddenBus(): boolean { return this.bus === 'ridden'; }
+
+  public finishChapter(): void {
+    if (!this.chapterOpen) return;
+    this.chapterOpen = false;
+    this.a11yUI.setActHeader(this.chapter + 1);
+    if (this.chapter === 3) {
+      this.bus = 'ridden';
+      this.builtScene.busVehicle.visible = false;
+      this.colliders.find(c => c.id === 'boarding_boundary')!.enabled = false;
+      this.callbacks.getPlayerPosition().set(WAYPOINTS.crosswalkCenterX, 1.6, STREET.stop.minZ - 0.9);
+      this.callbacks.onCollidersUpdated();
+    }
+  }
+
+  public showSunsetBus(): void {
+    this.builtScene.setBusRoute(7);
+    this.builtScene.busVehicle.position.set(STREET.busLane.x, 0, STREET.busLane.stopZ);
+    this.builtScene.busVehicle.visible = true;
+  }
+
+  private inStop(x: number, z: number): boolean {
+    const stop = STREET.stop;
+    return x >= stop.minX && x <= stop.maxX && z >= stop.minZ && z <= stop.maxZ;
+  }
+
+  private updateBus(x: number, z: number): void {
+    if (this.chapter !== 2 || this.bus === 'ridden') return;
+    const vehicle = this.builtScene.busVehicle;
+    if (!this.inStop(x, z)) {
+      this.bus = 'away';
+      vehicle.visible = false;
+      return;
+    }
+    const now = performance.now();
+    const stopZ = STREET.busLane.stopZ;
+    if (this.bus === 'away') {
+      this.bus = 'passing';
+      this.busDeadline = now + 2700;
+      this.announceBus(12);
+    }
+    if (this.bus === 'passing') {
+      vehicle.visible = true;
+      vehicle.position.z = stopZ + 14 - (this.busDeadline - now) / 2700 * 23;
+      if (now < this.busDeadline) return;
+      vehicle.visible = false;
+      this.bus = 'waiting';
+      this.busDeadline = now + 2600;
+      this.a11yUI.showSubtitle('不是这班车……再仔细听下一辆', 2100);
+    } else if (this.bus === 'boarding') {
+      if (now < this.busDeadline) return;
+      this.bus = 'waiting';
+      this.busDeadline = now + 6000;
+      this.a11yUI.showSubtitle('这班车已驶离，下一班 7 路即将到站。', 3400);
+    }
+    if (this.bus === 'waiting') {
+      const remaining = this.busDeadline - now;
+      // Depart the kerb, then bring the same pooled vehicle back for the next service.
+      if (remaining > 4400) {
+        vehicle.visible = true;
+        vehicle.position.z = stopZ + 14 * (6000 - remaining) / 1600;
+      } else if (remaining > 1450) {
+        vehicle.visible = false;
+      } else {
+        if (!vehicle.visible) {
+          this.builtScene.setBusRoute(7);
+          this.soundEngine.playBusArrival(7);
+        }
+        vehicle.visible = true;
+        vehicle.position.z = stopZ - 9 * Math.max(0, remaining / 1450) ** 2;
+        if (remaining <= 0) {
+          this.bus = 'boarding';
+          this.busDeadline = now + 6000;
+          this.announceBus(7);
+        }
+      }
+    }
+  }
+
+  private announceBus(route: 7 | 12): void {
+    this.builtScene.setBusRoute(route);
+    const text = route === 12 ? '12路开往火车站' : '7路开往老街路口';
+    if (route === 12) this.soundEngine.playBusArrival(route);
+    this.a11yUI.showSubtitle(text, route === 7 ? 5500 : 2600, '公交报站', this.soundEngine.getMuted() ? 'silent' : 'always');
+  }
+
+  public onGroundStep(feature: 'manhole' | 'puddle', point: THREE.Vector3): void {
+    this.ground = feature;
+    if (feature === 'manhole') {
+      this.soundEngine.playCaneTap('manhole', 0, false);
+      this.discoverManhole();
+    } else {
+      this.soundEngine.playSplashStep();
+      this.echoManager.emitPuddleRipple(point.x, point.z);
+    }
+  }
+
+  private updateStreet(player: THREE.Vector3): void {
+    const { x, z } = player;
+    const ground = groundFeature(x, z);
+    if (ground !== this.ground) {
+      if (ground) this.onGroundStep(ground, player);
+      else this.ground = null;
+    }
+    const nearPuddle = isNearPuddle(x, z, 0.85);
+    if (nearPuddle && !this.puddleNearby && ground !== 'puddle') this.soundEngine.playCaneTap('puddle', 0, false);
+    this.puddleNearby = nearPuddle;
+    if (z < STREET.puddle.z - STREET.puddle.rz) this.puddleProbeUntil = 0;
+    if (x > 5.8 && Math.abs(z + 15.6) < 0.52) this.bikesPassed = true;
+    const reconnect = x > streetX(12) && z <= STREET.gapEndZ && z >= STREET.puddle.z + STREET.puddle.rz + 0.85;
+    if (!this.gapPassed && reconnect && isOnTactilePath(x, z)) {
+      this.gapPassed = true;
+      this.a11yUI.showSubtitle('脚下重新出现了条状盲道砖。沿着它往前，留意脚下的积水。', 4200, '触觉反馈');
+    }
+    this.updateBus(x, z);
+    let hint = '';
+    if (!this.hasCane && Math.abs(x) <= 2 && z > -5.5) hint = '向右侧墙边摸索导盲杖。';
+    else if (this.canRequestHelp(player)) hint = this.callbacks.isTouchMode() ?
+      '点按「求助」，等待路人引导过街。' : '按 E 呼喊求助，等待路人引导过街。';
+    else if (this.chapter === 2 && this.inStop(x, z)) hint = this.callbacks.isTouchMode() ?
+      '听清 7 路车报站声，点按「上车」。' : '听清 7 路车报站声，按 E 招手上车。';
+    else if (nearPuddle || performance.now() < this.puddleProbeUntil)
+      hint = '前方盲道有积水，试探边缘绕行。';
+    else if (!this.gapPassed && this.chapter === 1 && x > streetX(12) && z <= STREET.gapEndZ)
+      hint = '请沿护栏末端重新踩回黄色盲道。';
+    else if (!this.manholeFound && Math.hypot(x - STREET.manhole.x, z - STREET.manhole.z) < 1.65)
+      hint = '脚下是嵌入盲道的金属井盖，小心试探边缘。';
+    else if (!this.bikesPassed && Math.abs(x - 4.8) < 2.8 && Math.abs(z + 15.6) < 2.5)
+      hint = '避开盲道上的单车，绕行后找回盲道。';
+    else if (!this.gapPassed && x > streetX(7.65) && x < streetX(15.8) && z < -13.3 && z > -19.35)
+      hint = '沿着左侧栏杆绕过施工区。';
+    this.setHint(hint);
+  }
+
+  private discoverManhole(): void {
+    if (this.manholeFound || this.endingTriggered) return;
+    this.manholeFound = true;
+    this.setHint('');
+    this.a11yUI.showSubtitle('盲道被一块冰凉的铁井盖切开了一半', 4800, '触觉反馈',
+      this.soundEngine.getMuted() ? 'silent' : 'always');
+  }
 
   private colliders: ColliderBox[];
   private builtScene: BuiltSceneResult;
@@ -86,6 +264,7 @@ export class StoryScriptManager {
   private ctxBtn: HTMLButtonElement;
   private ctxBraille: HTMLElement;
   private ctxLabel: HTMLElement;
+  private touchContext = document.getElementById('btn-touch-context') as HTMLButtonElement;
 
   constructor(
     colliders: ColliderBox[],
@@ -107,9 +286,8 @@ export class StoryScriptManager {
     this.ctxBraille = document.getElementById('ctx-braille')!;
     this.ctxLabel = document.getElementById('ctx-label')!;
 
-    this.ctxBtn.addEventListener('click', () => {
-      this.handleContextAction();
-    });
+    this.ctxBtn.addEventListener('click', () => this.handleContextAction());
+    this.touchContext.addEventListener('click', () => this.handleContextAction());
   }
 
   public getMemoriesFound(): number {
@@ -139,6 +317,17 @@ export class StoryScriptManager {
 
   public reset(): void {
     this.running = false;
+    this.chapter = 0;
+    this.chapterOpen = false;
+    this.bus = 'away';
+    this.busDeadline = this.finishDeadline = 0;
+    this.builtScene.busVehicle.visible = false;
+    this.builtScene.resetCat();
+    this.catGreeted = false;
+    this.manholeFound = this.gapPassed = this.bikesPassed = this.railFound = false;
+    this.ground = null;
+    this.setHint('');
+    this.colliders.find(c => c.id === 'boarding_boundary')!.enabled = true;
     this.hasCane = false;
     this.doorOpened = false;
     this.obstacleBumps = 0;
@@ -156,14 +345,14 @@ export class StoryScriptManager {
     this.builtScene.escortRig.joinedHandsLight.intensity = 0;
     this.steppedOnTactile = false;
     this.turn1HintShown = false;
-    this.turn2HintShown = false;
     this.bikeHintShown = false;
     this.barrierHintShown = false;
     this.stallVisited = false;
     this.crosswalkEntered = false;
     this.foyerReminderTimer = 0;
     this.playElapsed = 0;
-    this.helpCooldown = 0;
+    this.helpReadyAt = this.puddleProbeUntil = 0;
+    this.puddleNearby = false;
 
     this.beacons = createInitialBeacons();
     this.microInteractions = createInitialMicroInteractions();
@@ -219,6 +408,17 @@ export class StoryScriptManager {
   }
 
   public onCaneSurfaceHit(tag: SurfaceTag, point: THREE.Vector3): void {
+    if (this.chapterOpen || this.endingTriggered) return;
+    if (tag === 'manhole') this.discoverManhole();
+    if (tag === 'puddle') {
+      this.echoManager.emitPuddleRipple(point.x, point.z);
+      this.puddleProbeUntil = performance.now() + 2800;
+      this.setHint('前方盲道有积水，试探边缘绕行。');
+    }
+    if (tag === 'guardrail' && !this.railFound && !this.gapPassed) {
+      this.railFound = true;
+      this.a11yUI.showSubtitle('左手边是连续的金属栏杆。随它向左转，在尽头向右探两步，就能找回盲道。', 6300, '触觉反馈');
+    }
     if (tag === 'bike' && !this.bikeHintShown) {
       this.bikeHintShown = true;
       this.a11yUI.showSubtitle(
@@ -233,15 +433,15 @@ export class StoryScriptManager {
         5500,
         '盲杖回响'
       );
-    } else if ((tag === 'cat' || tag === 'stall') && !this.stallVisited && point.x > 9.5 && point.z < -20.5) {
+    } else if ((tag === 'cat' || tag === 'stall') && !this.stallVisited && point.x > streetX(9.5) && point.z < streetZ(-20.5)) {
       this.triggerStallWarmth();
-    } else if (tag === 'signal_pole') {
+    } else if (tag === 'signal_pole' && this.hasRiddenBus) {
       this.completeMicroInteraction('signal_pole');
     }
   }
 
   public onAirwallBlocked(): void {
-    if (!this.strangerArrived) {
+    if (!this.strangerArrived && performance.now() >= this.helpReadyAt) {
       this.a11yUI.showSubtitle(
         this.canRequestHelp(this.callbacks.getPlayerPosition())
           ? '面前车流疾驰，没有过街提示音……请点击「呼喊求助」或按 E 键向路人求助。'
@@ -258,7 +458,15 @@ export class StoryScriptManager {
    */
   public handleContextAction(): void {
     const action = this.getContextAction(this.callbacks.getPlayerPosition());
-    if (action === 'help') {
+    if (action === 'pickup') {
+      this.pickUpCane();
+      this.showContextPrompt(null);
+    } else if (action === 'door') {
+      this.openFoyerDoor();
+      this.showContextPrompt(null);
+    } else if (action === 'board') {
+      this.startChapter(3);
+    } else if (action === 'help') {
       this.handleHelpPress();
     } else if (action) {
       this.completeMicroInteraction(action.id);
@@ -294,6 +502,7 @@ export class StoryScriptManager {
         '无障碍记录'
       );
     } else if (id === 'pet_cat') {
+      this.builtScene.petCat();
       this.targetCatLightIntensity = 2.4;
       this.echoManager.setCatGlow(1.45);
       this.soundEngine.playCatGreeting(-0.35);
@@ -323,10 +532,10 @@ export class StoryScriptManager {
   }
 
   private handleHelpPress(): void {
-    if (this.helpCooldown > 0) return;
+    if (performance.now() < this.helpReadyAt) return;
 
     this.helpPressCount += 1;
-    this.helpCooldown = 1.35;
+    this.helpReadyAt = performance.now() + 2400;
     this.showContextPrompt(this.helpPressCount < HELP_PROMPTS.length ? 'help' : null);
 
     if (this.helpPressCount === 1) {
@@ -345,6 +554,7 @@ export class StoryScriptManager {
       );
     } else {
       this.strangerArrived = true;
+      this.setHint('');
       this.escortPhase = 'approaching';
       this.escortHoldingBlend = 0;
       this.escortStridePhase = 0;
@@ -355,13 +565,13 @@ export class StoryScriptManager {
 
       // Spawn warm backlit silhouette escort ahead-right (~1.8m away so never blocking camera!)
       this.builtScene.pedestrianGroup.visible = true;
-      this.builtScene.pedestrianGroup.position.set(WAYPOINTS.crosswalkCenterX + 0.72, 0.08, -31.1);
+      this.builtScene.pedestrianGroup.position.set(WAYPOINTS.crosswalkCenterX + 0.72, 0.08, streetZ(-43.1));
       this.builtScene.pedestrianGroup.rotation.y = -0.22;
       this.targetPedHaloIntensity = 2.8;
       this.builtScene.pedestrianHaloLight.position.set(
         WAYPOINTS.crosswalkCenterX + 0.72,
         1.85,
-        -31.1
+        streetZ(-43.1)
       );
 
       // Update beacons
@@ -370,9 +580,9 @@ export class StoryScriptManager {
       const strangerB = this.beacons.find((b) => b.id === 'stranger_voice');
       if (strangerB) strangerB.active = true;
 
-      this.tmpVec.set(WAYPOINTS.crosswalkCenterX + 0.5, 0.15, -30.8);
+      this.tmpVec.set(WAYPOINTS.crosswalkCenterX + 0.5, 0.15, streetZ(-42.8));
       this.echoManager.emitWave(this.tmpVec, 'amber', 4.6, 1.25, 1.0);
-      this.tmpVec.set(WAYPOINTS.crosswalkCenterX + 0.5, 0.2, -30.6);
+      this.tmpVec.set(WAYPOINTS.crosswalkCenterX + 0.5, 0.2, streetZ(-42.6));
       this.builtScene.spawnSparkles(this.tmpVec, true);
 
       this.a11yUI.showSubtitle(
@@ -388,7 +598,7 @@ export class StoryScriptManager {
     this.stallVisited = true;
     this.targetCatLightIntensity = Math.max(this.targetCatLightIntensity, 1.75);
     this.echoManager.setCatGlow(1.0);
-    this.soundEngine.playCatGreeting(-0.5);
+
     this.tmpVec.set(WAYPOINTS.catPos.x, 0.12, WAYPOINTS.catPos.z);
     this.echoManager.emitWave(this.tmpVec, 'amber', 4.6, 1.2);
     this.tmpVec.set(WAYPOINTS.catPos.x, 0.15, WAYPOINTS.catPos.z);
@@ -402,10 +612,10 @@ export class StoryScriptManager {
 
   public spawnTrafficBurst(dir: 1 | -1, audioBoost = 1.0): void {
     const slot = this.builtScene.trafficStreaks.find((t) => t.direction === dir);
-    if (slot) {
+    if (slot && !slot.active) {
       slot.active = true;
       slot.group.visible = true;
-      slot.group.position.x = WAYPOINTS.crosswalkCenterX + (dir === 1 ? -26 : 26);
+      slot.group.position.set(slot.spawnX, 0, slot.laneZ);
       slot.speed = 23 + Math.random() * 4;
     }
     if (audioBoost > 0) {
@@ -442,13 +652,21 @@ export class StoryScriptManager {
   }
 
   private canRequestHelp(playerPos: THREE.Vector3): boolean {
-    return this.running && this.hasCane && !this.endingTriggered && !this.strangerArrived &&
+    return this.bus === 'ridden' && this.running && this.hasCane && !this.endingTriggered && !this.strangerArrived &&
       this.helpPressCount < HELP_PROMPTS.length &&
       Math.abs(playerPos.x - WAYPOINTS.crosswalkCenterX) <= WAYPOINTS.crosswalkHalfWidth &&
       playerPos.z >= WAYPOINTS.crosswalkCurbZ && playerPos.z <= WAYPOINTS.crosswalkPromptZ;
   }
 
-  private getContextAction(playerPos: THREE.Vector3): 'help' | MicroInteraction | null {
+  private getContextAction(playerPos: THREE.Vector3): ContextAction {
+    if (this.chapterOpen || !this.running || this.endingTriggered) return null;
+    if (this.callbacks.isTouchMode()) {
+      if (!this.hasCane) return this.canPickUpCane(playerPos) ? 'pickup' : null;
+      if (!this.doorOpened && playerPos.z <= -3.75 && Math.abs(playerPos.x) < 1.65) return 'door';
+    }
+    if (this.chapter === 2 && this.inStop(playerPos.x, playerPos.z)) {
+      return this.bus === 'boarding' && performance.now() < this.busDeadline ? 'board' : null;
+    }
     if (this.canRequestHelp(playerPos)) return 'help';
     if (!this.running || !this.hasCane || this.endingTriggered || this.escortPhase !== 'none') {
       return null;
@@ -457,7 +675,7 @@ export class StoryScriptManager {
     let nearest: MicroInteraction | null = null;
     let bestDist = Infinity;
     for (const item of this.microInteractions) {
-      if (item.completed || !item.unlocked) continue;
+      if (item.completed || !item.unlocked || (item.id === 'signal_pole' && !this.hasRiddenBus)) continue;
       const distance = Math.hypot(playerPos.x - item.x, playerPos.z - item.z);
       if (distance < item.radius && distance < bestDist) {
         bestDist = distance;
@@ -467,18 +685,78 @@ export class StoryScriptManager {
     return nearest;
   }
 
-  private showContextPrompt(action: 'help' | MicroInteraction | null): void {
+  private showContextPrompt(action: ContextAction): void {
     const hidden = action === null;
-    const rawLabel = action === 'help' ? HELP_PROMPTS[this.helpPressCount] : action?.promptText ?? '';
+    const waiting = action === 'help' && performance.now() < this.helpReadyAt;
+    const rawLabel = waiting ? '请稍候，听听车声…' : action === 'help' ? HELP_PROMPTS[this.helpPressCount] : action === 'board' ? '招手上车' : action === 'pickup' ? '拾取导盲杖' : action === 'door' ? '推开门' : action?.promptText ?? '';
     // Strip inline "[E]" since the frameless prompt renders a crisp left [E] micro-keycap
     const label = rawLabel.replace(/\s*\[E\]/g, '').trim();
-    const braille = action === 'help' ? '⠠⠓⠑⠇⠏ · ⠟⠊⠥ 助' : action?.brailleHint ?? '';
+    const braille = action === 'help' ? '⠠⠓⠑⠇⠏ · ⠟⠊⠥ 助' : action === 'board' ? '7 路' : typeof action === 'object' ? action?.brailleHint ?? '' : '';
+    const touchVerb = action === 'help' ? (waiting ? '稍候' : '求助') :
+      action === 'board' ? '上车' : action === 'pickup' ? '拾取' : action === 'door' ? '推门' :
+        action ? TOUCH_VERBS[action.id] : '';
+    const touchVisible = !hidden && this.callbacks.isTouchMode();
+    if (this.touchContext.classList.contains('on') !== touchVisible) {
+      this.touchContext.classList.toggle('on', touchVisible);
+      this.touchContext.setAttribute('aria-hidden', String(!touchVisible));
+    }
+    if (this.touchContext.disabled !== (!touchVisible || waiting)) this.touchContext.disabled = !touchVisible || waiting;
+    if (this.touchContext.textContent !== touchVerb) this.touchContext.textContent = touchVerb;
     if (this.ctxWrap.hidden !== hidden) {
       this.ctxWrap.hidden = hidden;
-      this.ctxBtn.disabled = hidden;
     }
+    if (this.ctxBtn.disabled !== (hidden || waiting)) this.ctxBtn.disabled = hidden || waiting;
     if (this.ctxLabel.textContent !== label) this.ctxLabel.textContent = label;
     if (this.ctxBraille.textContent !== braille) this.ctxBraille.textContent = braille;
+  }
+
+  private canPickUpCane(player: THREE.Vector3): boolean {
+    return Math.hypot(player.x - WAYPOINTS.canePickupPos.x, player.z - WAYPOINTS.canePickupPos.z) < 1.55;
+  }
+
+  private pickUpCane(): void {
+    this.hasCane = true;
+    this.setHint('');
+    this.builtScene.canePickupGroup.visible = false;
+    this.echoManager.setCanePickupVisible(false, 0);
+    const caneB = this.beacons.find((b) => b.id === 'cane_beacon');
+    if (caneB) caneB.active = false;
+    const doorB = this.beacons.find((b) => b.id === 'door_breeze');
+    if (doorB) doorB.active = true;
+
+    this.soundEngine.playCaneTap('cane_pickup', 0.35, true);
+    this.echoManager.emitWave(
+      new THREE.Vector3(WAYPOINTS.canePickupPos.x, 0.12, WAYPOINTS.canePickupPos.z),
+      'amber',
+      5.2,
+      1.2
+    );
+    this.callbacks.onEquipCane();
+    this.a11yUI.showSubtitle(
+      this.callbacks.isTouchMode() ? '摸到了导盲杖！点按右下角敲杖探路，长按再松开可远探。' :
+        '摸到了导盲杖！点击左键或按空格手动「左敲一下、右敲一下」探路，长按可蓄力远距声波。',
+      7400,
+      '盲杖已拾取'
+    );
+  }
+
+  private openFoyerDoor(): void {
+    this.doorOpened = true;
+    const doorCol = this.colliders.find((c) => c.id === 'foyer_security_door');
+    if (doorCol) doorCol.enabled = false;
+    const doorB = this.beacons.find((b) => b.id === 'door_breeze');
+    if (doorB) doorB.active = false;
+
+    this.builtScene.doorSliverMesh.visible = false;
+    this.builtScene.doorShaftMesh.visible = false;
+    this.targetDoorCrackIntensity = 0.35;
+    this.soundEngine.playDoorOpen();
+    this.callbacks.onCollidersUpdated();
+    this.a11yUI.showSubtitle(
+      '推开门步入漆黑细雨夜，手动左右敲击导盲杖，寻找脚下的黄色盲道砖吧。',
+      5800,
+      '街头雨夜'
+    );
   }
 
   public update(
@@ -488,13 +766,10 @@ export class StoryScriptManager {
     isListening: boolean,
     camera: THREE.PerspectiveCamera
   ): void {
-    if (!this.running) return;
+    if (!this.running || this.chapterOpen) return;
 
     if (!this.endingTriggered) {
       this.playElapsed += dt;
-    }
-    if (this.helpCooldown > 0) {
-      this.helpCooldown = Math.max(0, this.helpCooldown - dt);
     }
 
     // Smoothly interpolate permanent scene lights (zero runtime light add/remove!)
@@ -508,6 +783,8 @@ export class StoryScriptManager {
     this.builtScene.sunsetDirLight.intensity +=
       (this.targetSunsetLightIntensity - this.builtScene.sunsetDirLight.intensity) * lightLerp;
 
+    if (!this.endingTriggered && !this.strangerArrived) this.updateStreet(playerPos);
+    else this.setHint('');
     this.updateFocusListenRadar(dt, playerPos, isListening);
     this.showContextPrompt(this.getContextAction(playerPos));
 
@@ -523,32 +800,8 @@ export class StoryScriptManager {
         this.soundEngine.playCaneTap('cane_pickup', 0.65, true);
       }
 
-      const distToCane = Math.hypot(
-        playerPos.x - WAYPOINTS.canePickupPos.x,
-        playerPos.z - WAYPOINTS.canePickupPos.z
-      );
-      if (distToCane < 1.55) {
-        this.hasCane = true;
-        this.builtScene.canePickupGroup.visible = false;
-        this.echoManager.setCanePickupVisible(false, totalElapsed);
-        const caneB = this.beacons.find((b) => b.id === 'cane_beacon');
-        if (caneB) caneB.active = false;
-        const doorB = this.beacons.find((b) => b.id === 'door_breeze');
-        if (doorB) doorB.active = true;
-
-        this.soundEngine.playCaneTap('cane_pickup', 0.35, true);
-        this.echoManager.emitWave(
-          new THREE.Vector3(WAYPOINTS.canePickupPos.x, 0.12, WAYPOINTS.canePickupPos.z),
-          'amber',
-          5.2,
-          1.2
-        );
-        this.callbacks.onEquipCane();
-        this.a11yUI.showSubtitle(
-          '摸到了导盲杖！点击左键或按空格手动「左敲一下、右敲一下」探路，长按可蓄力远距声波。',
-          7400,
-          '盲杖已拾取'
-        );
+      if (!this.callbacks.isTouchMode() && this.canPickUpCane(playerPos)) {
+        this.pickUpCane();
       } else if (playerPos.z < -4.25) {
         this.foyerReminderTimer = 7.5;
         this.a11yUI.showSubtitle(
@@ -561,32 +814,12 @@ export class StoryScriptManager {
     }
 
     // --- NODE 02: Push Open Foyer Door & Step onto Tactile Guiding Bricks ---
-    if (!this.doorOpened && playerPos.z <= -3.75) {
-      this.doorOpened = true;
-      const doorCol = this.colliders.find((c) => c.id === 'foyer_security_door');
-      if (doorCol) doorCol.enabled = false;
-      const doorB = this.beacons.find((b) => b.id === 'door_breeze');
-      if (doorB) doorB.active = false;
+    if (!this.callbacks.isTouchMode() && !this.doorOpened && playerPos.z <= -3.75) this.openFoyerDoor();
 
-      this.builtScene.doorSliverMesh.visible = false;
-      this.builtScene.doorShaftMesh.visible = false;
-      this.targetDoorCrackIntensity = 0.35;
-      this.soundEngine.playDoorOpen();
-      this.callbacks.onCollidersUpdated();
-      this.a11yUI.showSubtitle(
-        '推开门步入漆黑细雨夜，手动左右敲击导盲杖，寻找脚下的黄色盲道砖吧。',
-        5800,
-        '街头雨夜'
-      );
-    }
-
-    if (!this.steppedOnTactile && playerPos.z <= -6.2 && Math.abs(playerPos.x) < 0.78) {
+    if (!this.steppedOnTactile && playerPos.z <= -6.2) {
       this.steppedOnTactile = true;
-      this.a11yUI.showSubtitle(
-        '鞋底感受到了凸起的条形引导砖！手动左右交替敲杖，循着清脆回响与琥珀微光前行。',
-        5800,
-        '触觉反馈'
-      );
+      this.startChapter(1);
+      return;
     }
 
     // Z-Turn Corner #1 tactile dot cue (Turn 90° Right -> +X)
@@ -609,55 +842,40 @@ export class StoryScriptManager {
       }
     }
 
-    // Z-Turn Corner #2 tactile dot cue (Turn 90° Left -> -Z toward Breakfast Stall & Crosswalk)
-    if (!this.turn2HintShown) {
-      const distT2 = Math.hypot(
-        playerPos.x - WAYPOINTS.turn2Pos.x,
-        playerPos.z - WAYPOINTS.turn2Pos.z
-      );
-      if (distT2 < 1.45) {
-        this.turn2HintShown = true;
-        this.tmpVec.set(WAYPOINTS.turn2Pos.x, 0.12, WAYPOINTS.turn2Pos.z);
-        this.echoManager.emitWave(this.tmpVec, 'amber', 4.4, 1.15, 0.95);
-        this.a11yUI.showSubtitle(
-          '再次踩到圆点转向砖！向左拐进街角，前面隐约传来早点摊的蒸气与暖香。',
-          6200,
-          '触觉转向'
-        );
-      }
+    // --- NODE 04: Street-Corner Warm Breakfast Stall & Cat ---
+    if (!this.catGreeted && Math.hypot(playerPos.x - WAYPOINTS.catPos.x, playerPos.z - WAYPOINTS.catPos.z) <= 3.5) {
+      this.catGreeted = true;
+      this.soundEngine.playCatGreeting(-0.5);
+      this.triggerStallWarmth();
     }
 
-    // --- NODE 04: Street-Corner Warm Breakfast Stall & Cat ---
-    if (!this.stallVisited && playerPos.x > 10.0 && playerPos.z <= -21.8 && playerPos.z >= -26.2) {
-      const distToCat = Math.hypot(
-        playerPos.x - WAYPOINTS.catPos.x,
-        playerPos.z - WAYPOINTS.catPos.z
-      );
-      if (distToCat < 3.6) {
-        this.triggerStallWarmth();
-      }
+    if (this.chapter === 1 && this.gapPassed) {
+      this.startChapter(2);
+      return;
     }
 
     // --- Periodic Binaural Crosswalk Traffic ---
-    if (playerPos.x > 10.0 && playerPos.z <= -24.5 && !this.strangerArrived) {
+    if (this.bus === 'ridden' && playerPos.x > streetX(10) && playerPos.z <= WAYPOINTS.crosswalkPromptZ + 5 && !this.strangerArrived) {
       this.trafficTimer -= dt;
       if (this.trafficTimer <= 0) {
-        const proximityBoost = playerPos.z <= -28.0 ? 1.15 : 0.65;
+        const proximityBoost = playerPos.z <= WAYPOINTS.crosswalkPromptZ + 0.85 ? 1.15 : 0.65;
         this.spawnTrafficBurst(this.nextTrafficDir, proximityBoost);
         this.nextTrafficDir = this.nextTrafficDir === 1 ? -1 : 1;
-        this.trafficTimer = playerPos.z <= -28.0 ? 2.15 : 3.1;
+        this.trafficTimer = playerPos.z <= WAYPOINTS.crosswalkPromptZ + 0.85 ? 2.15 : 3.1;
       }
     }
 
     // --- NODE 05: Silent Crosswalk Warning Bricks ---
     if (!this.crosswalkEntered && this.canRequestHelp(playerPos)) {
       this.crosswalkEntered = true;
-      this.a11yUI.setActHeader(2);
-      this.a11yUI.showLocationCard('中山路口 · 无声斑马线 · 19:45', '第二幕 · 听声辨位与善意微光');
+      this.a11yUI.setActHeader(4);
+      this.a11yUI.showLocationCard('中山路口 · 无声斑马线 · 19:45', '第四幕 · 听声辨位与善意微光');
       this.spawnTrafficBurst(1, 1.2);
 
       this.a11yUI.showSubtitle(
-        '脚下变成密集的圆点提示砖！前方是没有过街提示音的斑马线，车流湍急，请按 E 或点击「呼喊求助」。',
+        this.callbacks.isTouchMode() ?
+          '脚下变成密集的圆点提示砖！前方是没有过街提示音的斑马线，请点按右下方「求助」。' :
+          '脚下变成密集的圆点提示砖！前方是没有过街提示音的斑马线，车流湍急，请按 E 或点击「呼喊求助」。',
         8500,
         '路口警示'
       );
@@ -711,7 +929,7 @@ export class StoryScriptManager {
         // Escort leads smoothly 1.5m ahead-right (0.65m right, 1.35m ahead -> hypot = 1.50m, never blocking view!)
         const targetX = Math.min(WAYPOINTS.crosswalkCenterX + 1.45, playerPos.x + 0.65);
         const targetZ = playerPos.z - 1.35;
-        const targetY = targetZ < -29.9 && targetZ > -39.7 ? 0.02 : 0.08;
+        const targetY = targetZ < streetZ(-41.9) && targetZ > streetZ(-51.7) ? 0.02 : 0.08;
         ped.position.x += (targetX - ped.position.x) * Math.min(1, dt * 6.5);
         ped.position.z += (targetZ - ped.position.z) * Math.min(1, dt * 6.5);
         ped.position.y += (targetY - ped.position.y) * Math.min(1, dt * 6.0);
@@ -734,7 +952,7 @@ export class StoryScriptManager {
         }
 
         // Gradual golden warmth begins illuminating the wet zebra stripes while crossing together!
-        const crossT = THREE.MathUtils.clamp((-29.5 - playerPos.z) / 11.0, 0, 1);
+        const crossT = THREE.MathUtils.clamp((-41.5 - playerPos.z) / 11.0, 0, 1);
         const preludeSunset = crossT * 0.38;
         if (preludeSunset > this.sunsetProgress) {
           this.sunsetProgress = preludeSunset;
@@ -754,7 +972,7 @@ export class StoryScriptManager {
         // Safely across! Step onto opposite curb framed in golden sunset backlight (Ref Image 4!)
         this.escortHoldingBlend = Math.max(0.0, this.escortHoldingBlend - dt * 1.8);
         const restX = WAYPOINTS.crosswalkCenterX;
-        const restZ = -41.9;
+        const restZ = streetZ(-53.9);
         ped.position.x += (restX - ped.position.x) * Math.min(1, dt * 2.2);
         ped.position.z += (restZ - ped.position.z) * Math.min(1, dt * 2.2);
         ped.position.y += (0.08 - ped.position.y) * Math.min(1, dt * 4.0);
@@ -769,9 +987,10 @@ export class StoryScriptManager {
       void camera;
     }
 
-    // --- NODE 06: Golden After-Rain Sunset Finale (Z <= -43.0, 2.5s Transition) ---
-    if (!this.endingTriggered && playerPos.z <= WAYPOINTS.sunsetFinishZ) {
+    // --- NODE 06: Golden After-Rain Sunset Finale (Z <= -55.0, 2.5s Transition) ---
+    if (!this.endingTriggered && this.escortPhase === 'holding_hands' && playerPos.z <= WAYPOINTS.sunsetFinishZ) {
       this.endingTriggered = true;
+      this.finishDeadline = performance.now() + 3500;
       this.showContextPrompt(null);
       this.escortPhase = 'arrived';
       this.callbacks.onEscortAssistChange(false);
@@ -790,17 +1009,10 @@ export class StoryScriptManager {
       this.targetSunsetLightIntensity = ease * 3.65;
       this.builtScene.ambientHemiLight.intensity = 0.85 + ease * 0.65;
 
-      if (this.sunsetProgress >= 1.0 && !this.endingModalShown) {
-        this.endingModalShown = true;
-        window.setTimeout(() => {
-          this.callbacks.onReachEnding(
-            Math.max(1, Math.round(this.playElapsed)),
-            this.obstacleBumps,
-            this.getMemoriesFound(),
-            this.microInteractions.length
-          );
-        }, 700);
-      }
+    }
+    if (this.endingTriggered && !this.endingModalShown && performance.now() >= this.finishDeadline) {
+      this.endingModalShown = true;
+      this.callbacks.onReachEnding(Math.max(1, Math.round(this.playElapsed)), this.obstacleBumps);
     }
   }
 }

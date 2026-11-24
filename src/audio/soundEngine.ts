@@ -142,7 +142,16 @@ export class SpatialSoundEngine {
       this.synthStrike(panner, now + 0.03, 523.25, 520, 0.55, 0.14, 'triangle');
     }
 
-    if (tag === 'tactile_line') {
+    if (tag === 'manhole') {
+      this.synthStrike(panner, now, 178, 104, 0.32, 0.42 * vol, 'triangle');
+      this.synthStrike(panner, now + 0.075, 234, 166, 0.44, 0.16 * vol, 'sine');
+    } else if (tag === 'guardrail') {
+      this.synthStrike(panner, now, 1360, 1320, 0.27, 0.29 * vol, 'sine');
+      this.synthStrike(panner, now, 2140, 2090, 0.18, 0.18 * vol, 'triangle');
+    } else if (tag === 'puddle') {
+      this.synthNoiseClick(panner, now, 3200, 1.4, 0.09, 0.28 * vol);
+      this.synthStrike(panner, now + 0.04, 720, 1560, 0.08, 0.18 * vol, 'sine');
+    } else if (tag === 'tactile_line') {
       this.synthStrike(panner, now, 980, 1420, 0.1, 0.34 * vol, 'triangle');
       this.synthNoiseClick(panner, now, 1850, 2.2, 0.048, 0.22 * vol);
     } else if (tag === 'tactile_dot') {
@@ -178,6 +187,23 @@ export class SpatialSoundEngine {
     this.playPianoTone(523.25, now, 1.2, 0.12);
     this.playPianoTone(659.25, now + 0.09, 1.4, 0.12);
     this.playPianoTone(1046.5, now + 0.18, 1.8, 0.11);
+  }
+
+  public playSplashStep(): void {
+    if (!this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    this.synthNoiseClick(this.masterGain, now, 720, 0.65, 0.22, 0.45);
+    this.synthNoiseClick(this.masterGain, now + 0.06, 2500, 0.9, 0.14, 0.24);
+  }
+
+  public playBusArrival(route: 7 | 12): void {
+    this.playTrafficWhoosh(1, 0.78, route === 7);
+    if (route === 7 && this.ctx && this.masterGain) {
+      const brake = this.ctx.createStereoPanner();
+      brake.pan.value = 0.55;
+      brake.connect(this.masterGain);
+      this.synthNoiseClick(brake, this.ctx.currentTime + 0.7, 2350, 3, 0.48, 0.30);
+    }
   }
 
   public playFootstep(onTactile: boolean, isIndoor: boolean): void {
@@ -272,14 +298,14 @@ export class SpatialSoundEngine {
     });
   }
 
-  public playTrafficWhoosh(direction: 1 | -1, volumeBoost = 1.0): void {
+  public playTrafficWhoosh(direction: 1 | -1, volumeBoost = 1.0, stopping = false): void {
     if (!this.ctx || !this.masterGain || !this.noiseBuffer || !this.unlocked) return;
     const now = this.ctx.currentTime;
     const dur = 1.45;
 
     const panner = this.ctx.createStereoPanner();
     const startPan = direction === 1 ? -0.95 : 0.95;
-    const endPan = direction === 1 ? 0.95 : -0.95;
+    const endPan = stopping ? 0.48 : -startPan;
     panner.pan.setValueAtTime(startPan, now);
     panner.pan.linearRampToValueAtTime(endPan, now + dur);
     panner.connect(this.masterGain);

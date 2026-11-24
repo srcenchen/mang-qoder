@@ -1,8 +1,8 @@
 {
-  "name": "tingjian-mangdaoxing-3d",
+  "name": "light-on-the-tactile-path",
   "private": true,
   "version": "1.0.0",
-  "description": "《听见·盲道行 3D》— 第一人称盲人视角城市无障碍共情体验小游戏",
+  "description": "《盲道有光》— 第一人称盲人视角城市无障碍共情体验小游戏",
   "type": "module",
   "scripts": {
     "dev": "vite",

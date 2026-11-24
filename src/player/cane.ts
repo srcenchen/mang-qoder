@@ -181,6 +181,11 @@ export class GuideCaneSystem {
     this.chargeProgress = 0;
   }
 
+  public cancelCharge(): void {
+    this.isCharging = false;
+    this.chargeHoldSec = this.chargeProgress = 0;
+  }
+
   /** Begin holding Space / LMB / Cane Button to prepare & charge a tap */
   public beginCharge(): void {
     if (!this.equipped || this.isCharging) return;

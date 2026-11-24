@@ -7,18 +7,18 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
     <meta name="theme-color" content="#0b0d0f" />
-    <title>听见 · 盲道行 3D | ⠞⠊⠝⠛ ⠚⠊⠁⠝</title>
+    <title>盲道有光 | 3D 盲人视角体验</title>
   </head>
   <body class="bg-[#0b0d0f] text-[#e8e4da] overflow-hidden select-none touch-none antialiased">
-    <!-- Stage Wrapper (Automatically enters CSS landscape on mobile portrait devices!) -->
+    <!-- Game stage -->
     <div id="stage-root" class="stage-root">
       <!-- Full-bleed WebGL2 3D Viewport -->
       <div id="canvas-container" class="absolute inset-0 z-0"></div>
 
       <!-- Cinema Boot Curtain -->
       <div id="boot" aria-hidden="true">
-        <div class="boot-braille">⠞⠊⠝⠛ ⠚⠊⠁⠝ · ⠍⠁⠝⠛ ⠙⠁⠕ ⠭⠊⠝⠛</div>
-        <div class="boot-mark">听见 · 盲道行</div>
+        <div class="boot-braille">⠍⠁⠝⠛ ⠙⠁⠕ ⠽⠕⠥ ⠛⠥⠁⠝⠛</div>
+        <div class="boot-mark">盲道有光</div>
         <div class="boot-sub" id="boot-msg">正在构建雨夜声波视界与物理水洼反射</div>
         <div class="boot-bar"><i id="boot-fill"></i></div>
       </div>
@@ -29,18 +29,18 @@
       <!-- ================================================================== -->
       <!-- LIVE 3D GALLERY-STYLE TITLE SCREEN (Open Minimalist Typography)    -->
       <!-- ================================================================== -->
-      <section id="title-screen" class="title-menu open" aria-label="听见·盲道行 主标题界面">
+      <section id="title-screen" class="title-menu open" aria-label="盲道有光 主标题界面">
         <div class="m-veil"></div>
         <div class="m-title">
           <div class="m-title-main">
             <div class="m-eyebrow">
-              <span class="m-braille-line">⠞⠊⠝⠛ ⠚⠊⠁⠝ · ⠍⠁⠝⠛ ⠙⠁⠕ ⠭⠊⠝⠛</span>
+              <span class="m-braille-line">⠍⠁⠝⠛ ⠙⠁⠕ ⠽⠕⠥ ⠛⠥⠁⠝⠛</span>
               <span class="m-sep" aria-hidden="true"></span>
-              <span class="m-dim">BLIND PATH ECHO · 旧城雨夜 19:42</span>
+              <span class="m-dim">LIGHT ON THE TACTILE PATH · 旧城雨夜 19:42</span>
             </div>
 
             <h1 class="m-word">
-              <span class="whitespace-nowrap">听见 · 盲道行</span>
+              <span class="whitespace-nowrap">盲道有光</span>
             </h1>
 
             <p class="m-premise">
@@ -104,6 +104,7 @@
 
           <!-- Right: Frameless Minimalist Text-Link Controls -->
           <div class="hud-actions">
+            <button id="btn-listen" class="hud-link" type="button" aria-label="按住聆听">聆听</button>
             <button
               id="btn-peek"
               type="button"
@@ -132,8 +133,10 @@
             >
               <span id="icon-sound">🔊</span>
             </button>
+
           </div>
         </header>
+
 
         <!-- Bare Floating Desktop Pointer-Lock Hint -->
         <div id="pointer-hint" class="pointer-hint hidden">
@@ -164,42 +167,37 @@
           </button>
         </div>
 
-        <!-- Frameless Full-Width Bottom Mist Cinema Subtitles -->
-        <div id="subtitle-wrap" aria-live="polite" class="comms-wrap">
-          <div id="subtitle-box" class="comms-box">
+        <!-- Upper-left narration subtitles -->
+        <div id="subtitle-wrap" class="comms-wrap">
+          <div id="subtitle-box" aria-live="polite" class="comms-box">
             <div id="subtitle-speaker" class="comms-who">内心感知</div>
             <p id="subtitle-text" class="comms-text"></p>
           </div>
+          <div id="scene-hint" class="comms-text" aria-live="polite" aria-hidden="true">
+              <strong aria-hidden="true">!</strong><span id="scene-hint-text"></span>
+            </div>
         </div>
 
-        <!-- Minimalist Touch & Action Controls (<= 4px Chamfer, Zero Bubble Pill Style) -->
+        <!-- Touch-only landscape controls -->
         <div id="touch-controls" class="touch-bar">
           <!-- Bottom-Left Touch Joystick -->
-          <div id="joystick-zone" class="joy-zone">
-            <div class="joy-label">移动</div>
+          <div id="joystick-zone" class="joy-zone" role="group" aria-label="移动摇杆">
+
             <div id="joystick-knob" class="joy-knob"></div>
           </div>
 
-          <!-- Bottom-Right Actions: Focus Listen + Charged Cane Tap -->
+          <!-- Directional camera pad and charged cane tap -->
           <div class="right-pad">
-            <button
-              id="btn-listen"
-              type="button"
-              title="按住凝神聆听周围声源方位 (Shift / 右键)"
-              class="listen-btn"
-            >
-              <span class="action-braille" aria-hidden="true">⠇⠊⠎⠞⠑⠝</span>
-              <span class="action-title">聆听</span>
-            </button>
+            <button id="btn-touch-context" class="cane-btn touch-context" type="button" aria-hidden="true" disabled></button>
 
             <button id="btn-cane-tap" type="button" disabled class="cane-btn">
               <svg class="charge-bar-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
                 <circle class="charge-track" cx="50" cy="50" r="46"></circle>
                 <circle id="charge-arc" class="charge-fill" cx="50" cy="50" r="46"></circle>
               </svg>
-              <span class="action-braille cyan" aria-hidden="true">⠞⠁⠏</span>
-              <span class="action-title">敲杖探路</span>
-              <span class="action-sub">轻按 / 长按</span>
+
+              <span class="action-title">敲杖</span>
+
             </button>
           </div>
         </div>
@@ -303,16 +301,6 @@
               </div>
             </div>
 
-            <div class="row">
-              <div>
-                <div class="row-title">移动端自动横屏</div>
-                <div class="row-desc">手机竖持时自动切换为全屏影院横屏（自动映射触控方向）</div>
-              </div>
-              <button id="toggle-landscape" type="button" class="toggle" aria-pressed="true">
-                <i></i><span>开启</span>
-              </button>
-            </div>
-
             <p class="panel-note">
               内置 HDR Bloom 辉光、ACES/AgX 混合色调映射、真实平面水洼倒影与 GPU 粒子雨。若在老旧手机上游玩，建议切至「低」或「中」。
             </p>
@@ -320,7 +308,7 @@
 
           <!-- Tab 3: Controls -->
           <div class="panel-b hidden" data-pane="controls">
-            <h3>桌面端键鼠操作</h3>
+            <h3 class="desktop-instructions">桌面端键鼠操作</h3>
             <div class="ctrl-list">
               <div><span>移动脚步</span><kbd>W A S D / ↑ ↓</kbd></div>
               <div><span>自由转动视角（捕捉鼠标）</span><kbd>点击画面后移动鼠标</kbd></div>
@@ -331,15 +319,15 @@
               <div><span>释放鼠标 / 透视模式 / 静音</span><kbd>Esc / P / M</kbd></div>
             </div>
 
-            <h3>手机与触屏操作（自动横屏）</h3>
+            <h3>手机横屏操作</h3>
             <p class="panel-note">
-              移动端进入体验后自动锁定/旋转至电影宽屏横屏。左下角触控区域移动；空白处单指滑动平滑转头并扫杖；右下角支持轻点/长按蓄力敲杖与按住凝神聆听。
+              左手拖动圆盘移动，在右侧空白处滑动可转动视角。轻按右下角敲杖，长按再松开可远探。按住顶部「聆听」可定位声源，互动按钮出现时直接点按。
             </p>
           </div>
 
           <!-- Tab 4: About -->
           <div class="panel-b hidden" data-pane="about">
-            <h3>关于《听见 · 盲道行 3D》</h3>
+            <h3>关于《盲道有光》</h3>
             <p class="about-p">
               本作品为面向 <strong>2026 Qoder 高校创造力大赛</strong> 打造的纯前端 3D 盲人视角公益互动体验。用短短 45 米的雨夜折线街道，真实呈现盲道转折、违停单车占道、施工围挡截断与无提示音斑马线的出行困境。
             </p>
@@ -357,94 +345,31 @@
       </div>
 
       <!-- ================================================================== -->
-      <!-- FULL-SCREEN FROSTED ENDING OVERLAY + CENTERED POSTER LIGHTBOX      -->
-      <!-- ================================================================== -->
-      <div id="ending-modal" role="dialog" aria-modal="true" class="ending-backdrop hidden">
-        <!-- View A: Open Frameless Settlement Summary -->
-        <div id="ending-summary-view" class="ending-stage">
-          <div class="ending-head">
-            <p class="ending-braille" aria-hidden="true">⠚⠕⠥⠗⠝⠑⠽ ⠉⠕⠍⠏⠇⠑⠞⠑</p>
-            <h2 class="ending-title">穿过雨夜，善意被听见</h2>
-            <p class="ending-sub">
-              这 45 米盲道上的每一次敲击与停顿，都是全国 1731 万视障者真实的日常。
-            </p>
-          </div>
-
-          <div class="ending-rule" aria-hidden="true"></div>
-
-          <!-- Open Horizontal Metrics Strip (1px Vertical Hairlines Only — Zero Boxes!) -->
-          <div class="ending-metrics">
-            <div class="metric-col">
-              <div id="stat-time" class="metric-num accent-amber">0s</div>
-              <div class="metric-lbl">总耗时</div>
-            </div>
-            <div class="metric-divider" aria-hidden="true"></div>
-            <div class="metric-col">
-              <div id="stat-taps" class="metric-num accent-cyan">0</div>
-              <div class="metric-lbl">盲杖探路</div>
-            </div>
-            <div class="metric-divider" aria-hidden="true"></div>
-            <div class="metric-col">
-              <div id="stat-bumps" class="metric-num accent-bone">0</div>
-              <div class="metric-lbl">障碍碰壁</div>
-            </div>
-            <div class="metric-divider" aria-hidden="true"></div>
-            <div class="metric-col">
-              <div id="stat-memories" class="metric-num accent-warm">0/3</div>
-              <div class="metric-lbl">城市微光</div>
-            </div>
-          </div>
-
-          <div class="ending-rule" aria-hidden="true"></div>
-
-          <div class="ending-actions">
-            <button id="btn-generate-poster" type="button" class="btn primary">
-              生成公益共情海报
-            </button>
-            <div class="ending-sec-actions">
-              <button id="btn-admire-sunset" type="button" class="btn small">
-                漫游夕阳街景
-              </button>
-              <button id="btn-restart" type="button" class="btn small">
-                再次体验
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- View B: Independent Centered Poster Lightbox (72vh ~ 78vh Hero Focus!) -->
-        <div id="poster-preview-wrap" class="poster-lightbox hidden">
-          <div class="poster-frame">
-            <img
-              id="poster-img"
-              alt="城市无障碍共情分享海报"
-              class="poster-hero-img select-auto"
-            />
-          </div>
-          <div class="poster-bar">
-            <a
-              id="btn-download-poster"
-              download="听见盲道行-城市无障碍共情海报.png"
-              class="btn primary small-primary"
-            >
-              下载高清海报
-            </a>
-            <button id="btn-back-summary" type="button" class="btn small">
-              返回结算
-            </button>
-            <button id="btn-poster-roam" type="button" class="btn small">
-              漫游街景
-            </button>
-          </div>
-          <p class="poster-tip">手机端可长按海报直接保存分享</p>
-        </div>
+      <!-- CHAPTER TRANSITIONS AND JOURNEY ENDING      -->
+      <div id="chapter-screen" class="chapter-screen" role="dialog" aria-modal="true" aria-labelledby="chapter-text" tabindex="-1" hidden>
+        <span class="chapter-body"><i aria-hidden="true"></i><span id="chapter-text"></span></span>
+        <small>点击或按空格继续</small>
       </div>
 
+      <section id="ending-modal" role="dialog" aria-modal="true" aria-label="旅程结尾" tabindex="-1" class="ending-backdrop hidden">
+        <p id="ending-question">如果蒙住双眼，你还能不能读懂世界的规则？</p>
+        <div id="ending-content" hidden>
+        <h2 id="ending-thanks">感谢你完整地体验了我们的游戏，感谢你对视障人群的关注。</h2>
+        <div class="ending-rule" aria-hidden="true"></div>
+        <div class="ending-links">
+          <button type="button" id="btn-admire-sunset">漫游夕阳街景</button>
+          <button type="button" id="btn-restart">重新体验</button>
+        </div>
+        <p id="journey-record"></p>
+        </div>
+      </section>
+
       <button id="btn-reopen-ending" type="button" class="reopen-pill hidden">
-        查看结算与共情海报
+        查看体验记录
       </button>
     </div>
 
+    <div id="rotation-guide" role="status" hidden><span>请将手机横屏旋转，<wbr>以获得完整体验</span></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

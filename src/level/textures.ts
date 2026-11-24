@@ -16,7 +16,6 @@ export interface ProceduralTextureSet {
   tactileLine: PBRMapGroup;
   tactileDot: PBRMapGroup;
   barrierStripe: PBRMapGroup;
-  crosswalk: PBRMapGroup;
   darkWood: PBRMapGroup;
   warmWood: PBRMapGroup;
   bamboo: PBRMapGroup;
@@ -397,6 +396,8 @@ export function createProceduralTextures(): ProceduralTextureSet {
       col.fillStyle = `rgb(${v},${v + 2},${v + 5})`;
       col.fillRect(x, y, 2, 2);
       const hv = 75 + Math.floor(rand() * 145);
+      // Keep the fine color grain; only some grains disturb the wet surface normal.
+      if (i % 4 !== 0) continue;
       hCtx.fillStyle = `rgb(${hv},${hv},${hv})`;
       hCtx.fillRect(x, y, 2, 2);
     }
@@ -405,8 +406,10 @@ export function createProceduralTextures(): ProceduralTextureSet {
       const px = rand() * size;
       const py = rand() * size;
       const pr = 40 + rand() * 90;
+      // Preserve the random stream shared by the textures generated after this one.
+      if (p % 2 !== 0) continue;
       const g = rCtx.createRadialGradient(px, py, 6, px, py, pr);
-      g.addColorStop(0, 'rgba(16,16,16,0.95)');
+      g.addColorStop(0, 'rgba(16,16,16,0.72)');
       g.addColorStop(1, 'rgba(94,94,94,0)');
       rCtx.fillStyle = g;
       rCtx.beginPath();
@@ -621,44 +624,6 @@ export function createProceduralTextures(): ProceduralTextureSet {
   };
 
   // 10. Weathered White Zebra Crosswalk Paint
-  const createCrosswalk = (): PBRMapGroup => {
-    const w = 512;
-    const h = 256;
-    const [cCol, col] = makeCanvas(w, h);
-    const [cH, hCtx] = makeCanvas(w, h);
-    const [cR, rCtx] = makeCanvas(w, h);
-
-    col.fillStyle = '#e2e8f0';
-    col.fillRect(0, 0, w, h);
-    hCtx.fillStyle = '#d0d0d0';
-    hCtx.fillRect(0, 0, w, h);
-    rCtx.fillStyle = '#4e4e4e';
-    rCtx.fillRect(0, 0, w, h);
-
-    for (let i = 0; i < 850; i++) {
-      const x = rand() * w;
-      const y = rand() * h;
-      const onEdge = y < 32 || y > h - 32 || x < 28 || x > w - 28;
-      const rx = (onEdge ? 14 : 6) + rand() * 28;
-      const ry = 4 + rand() * 14;
-      if (rand() < (onEdge ? 0.68 : 0.24)) {
-        col.fillStyle = `rgba(24,28,36,${0.5 + rand() * 0.48})`;
-        col.fillRect(x, y, rx, ry);
-        hCtx.fillStyle = '#383838';
-        hCtx.fillRect(x, y, rx, ry);
-        rCtx.fillStyle = '#181818';
-        rCtx.fillRect(x, y, rx, ry);
-      }
-    }
-
-    return {
-      map: toTexture(cCol, true, 1, 1),
-      normalMap: heightToNormalTexture(cH, 2.0, 1, 1),
-      roughnessMap: toTexture(cR, false, 1, 1),
-    };
-  };
-
-  // 11 & 12. Dark Walnut & Warm Cedar Wood
   const createWood = (baseHex: string, grainRgb: [number, number, number]): PBRMapGroup => {
     const size = 256;
     const [cCol, col] = makeCanvas(size, size);
@@ -772,7 +737,6 @@ export function createProceduralTextures(): ProceduralTextureSet {
     tactileLine: createTactileLine(),
     tactileDot: createTactileDot(),
     barrierStripe: createBarrierStripe(),
-    crosswalk: createCrosswalk(),
     darkWood: createWood('#3a2519', [20, 12, 7]),
     warmWood: createWood('#6e482b', [38, 22, 10]),
     bamboo: createBamboo(),

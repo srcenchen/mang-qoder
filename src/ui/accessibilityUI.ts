@@ -7,14 +7,12 @@ export interface AccessibilityCallbacks {
   onQualityChange: (quality: QualityName) => void;
   onVolumeChange: (volume: number) => void;
   onSensitivityChange: (sens: number) => void;
-  onAutoLandscapeChange: (enabled: boolean) => void;
   onDrawerToggle: (open: boolean) => void;
 }
 
 export class AccessibilityUI {
   public highContrast = false;
   public ttsEnabled = false;
-  public autoLandscape = true;
   public echoDuration = 2.5;
 
   private subtitleWrap: HTMLElement;
@@ -37,7 +35,6 @@ export class AccessibilityUI {
   private modal: HTMLElement;
   private toggleContrastBtn: HTMLElement;
   private toggleTtsBtn: HTMLElement;
-  private toggleLandscapeBtn: HTMLElement;
   private echoDurLabel: HTMLElement;
   private echoDurBtns: NodeListOf<HTMLButtonElement>;
   private qualityBtns: NodeListOf<HTMLButtonElement>;
@@ -50,6 +47,8 @@ export class AccessibilityUI {
 
   constructor(initialQuality: QualityName, callbacks: AccessibilityCallbacks) {
     this.callbacks = callbacks;
+    // Begin loading system voices while the title screen is being prepared.
+    window.speechSynthesis?.getVoices();
 
     this.subtitleWrap = document.getElementById('subtitle-wrap')!;
     this.subtitleSpeaker = document.getElementById('subtitle-speaker')!;
@@ -71,7 +70,6 @@ export class AccessibilityUI {
     this.modal = document.getElementById('a11y-modal')!;
     this.toggleContrastBtn = document.getElementById('toggle-contrast')!;
     this.toggleTtsBtn = document.getElementById('toggle-tts')!;
-    this.toggleLandscapeBtn = document.getElementById('toggle-landscape')!;
     this.echoDurLabel = document.getElementById('echo-duration-label')!;
     this.echoDurBtns = document.querySelectorAll<HTMLButtonElement>('.echo-dur-btn');
     this.qualityBtns = document.querySelectorAll<HTMLButtonElement>('.quality-btn');
@@ -274,13 +272,6 @@ export class AccessibilityUI {
       this.callbacks.onSensitivityChange(v);
     });
 
-    // 6. Mobile Auto-Landscape Toggle
-    this.toggleLandscapeBtn.addEventListener('click', () => {
-      this.autoLandscape = !this.autoLandscape;
-      this.updateToggleVisual(this.toggleLandscapeBtn, this.autoLandscape);
-      this.callbacks.onAutoLandscapeChange(this.autoLandscape);
-    });
-
     // Focus announcement for TTS users
     document.querySelectorAll('button').forEach((button) => {
       button.addEventListener('focus', () => {
@@ -321,17 +312,13 @@ export class AccessibilityUI {
     this.callbacks.onDrawerToggle(false);
   }
 
-  public setActHeader(actNum: 1 | 2): void {
-    if (actNum === 1) {
-      this.actBraille.textContent = '⠁⠉⠞ ⠼⠁ · ⠋⠕⠽⠑⠗ ⠯ ⠏⠁⠞⠓';
-      this.actTitle.textContent = '第一幕 · 暗室与占道盲道';
-    } else {
-      this.actBraille.textContent = '⠁⠉⠞ ⠼⠃ · ⠉⠗⠕⠎⠎⠺⠁⠇⠅';
-      this.actTitle.textContent = '第二幕 · 无提示音斑马线';
-    }
+  public setActHeader(act: number): void {
+    this.actTitle.textContent = ['第一幕 · 玄关寻杖', '第二幕 · 旧街盲道', '第三幕 · 听声候车', '第四幕 · 无声路口'][act - 1];
+    this.actBraille.textContent = '⠁⠉⠞ ⠼' + ['⠁', '⠃', '⠉', '⠙'][act - 1];
   }
 
-  public showSubtitle(text: string, durationMs = 6200, speaker = '内心感知'): void {
+  public showSubtitle(text: string, durationMs = 6200, speaker = '内心感知',
+    voice: 'setting' | 'always' | 'silent' = 'setting'): void {
     if (this.subtitleHideTimer !== null) {
       window.clearTimeout(this.subtitleHideTimer);
     }
@@ -339,7 +326,7 @@ export class AccessibilityUI {
     this.subtitleSpeaker.textContent = speaker;
     this.subtitleText.textContent = text;
     this.subtitleWrap.classList.add('on');
-    this.speak(text);
+    if (voice !== 'silent') this.speak(text, voice === 'always', speaker === '公交报站' ? 0.68 : 1);
 
     if (durationMs > 0) {
       this.subtitleHideTimer = window.setTimeout(() => {
@@ -348,13 +335,14 @@ export class AccessibilityUI {
     }
   }
 
-  public speak(text: string, force = false): void {
+  public speak(text: string, force = false, volume = 1): void {
     if ((!this.ttsEnabled && !force) || !('speechSynthesis' in window)) return;
     try {
       window.speechSynthesis.cancel();
       const utter = new SpeechSynthesisUtterance(text.replace(/[·—]/g, '，'));
       utter.lang = 'zh-CN';
       utter.rate = 1.02;
+      utter.volume = volume;
       window.speechSynthesis.speak(utter);
     } catch {
       // Ignore on unsupported webviews
