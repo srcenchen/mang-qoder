@@ -1,6 +1,7 @@
 export type SurfaceTag =
   | 'tactile_line'
   | 'tactile_dot'
+  | 'manhole' | 'puddle' | 'guardrail' | 'bus_stop'
   | 'bike'
   | 'barrier'
   | 'stall'
@@ -70,47 +71,94 @@ export interface LevelWaypoints {
 export const PLAYER_EYE_HEIGHT = 1.6;
 export const PLAYER_RADIUS = 0.32;
 
-/**
- * Z-shaped real urban street corridor:
- * - Foyer (X=0, Z=+1.5 -> -5.5) -> entry blister-dot pad
- * - Leg 1 (-Z straight 9.6m along X=0) -> Turn #1 blister-dot pad at (0, -15.6) -> turn 90° RIGHT (+X)
- * - Leg 2 (+X 14.0m along Z=-15.6) -> shared bikes at (4.8, -15.6) -> construction barrier at (9.2, -15.6)
- *         -> Turn #2 blister-dot pad at (14.0, -15.6) -> turn 90° LEFT (-Z)
- * - Leg 3 (-Z 13.8m along X=14.0) -> warm breakfast stall & tabby cat on left -> crosswalk dot pad at (14.0, -29.32)
- *         -> zebra crosswalk -> opposite safe curb & golden sunset finale at Z <= -40.4
- */
+// Distances along the folded route. Move features rigidly and rebuild continuous
+// floors, buildings and rails from the relocated endpoints.
+const gapAfterBikes = 4.5;
+const gapBeforePuddle = 4.5;
+const approachToStop = -3.5;
+const gapAfterStop = 5;
+
+export function streetX(x: number): number {
+  return x > 7.5 ? x + gapAfterBikes : x;
+}
+
+export function streetZ(z: number): number {
+  if (z <= -40.75) return z - (gapBeforePuddle + approachToStop + gapAfterStop);
+  if (z <= -32) return z - (gapBeforePuddle + approachToStop);
+  if (z <= -20) return z - gapBeforePuddle;
+  return z;
+}
+
 export const WAYPOINTS: LevelWaypoints = {
   playerStart: { x: 0, y: PLAYER_EYE_HEIGHT, z: 1.5 },
   canePickupPos: { x: 1.62, y: 0.0, z: -2.35 },
   foyerDoorZ: -5.5,
   firstTactileZ: -6.4,
-  turn1Pos: { x: 0.0, z: -15.6 },
+  turn1Pos: { x: 0, z: -15.6 },
   bikesCenter: { x: 4.8, z: -15.6 },
-  barrierCenter: { x: 9.2, z: -15.6 },
-  turn2Pos: { x: 14.0, z: -15.6 },
-  stallLightPos: { x: 11.55, y: 2.25, z: -23.6 },
-  catPos: { x: 13.08, y: 0.08, z: -23.6 },
-  signalPolePos: { x: 15.55, y: 0.08, z: -29.25 },
-  crosswalkCenterX: 14.0,
-  crosswalkPromptZ: -28.85,
-  crosswalkCurbZ: -29.68,
-  crosswalkHalfWidth: 1.85,
-  pedestrianPos: { x: 14.0, y: 0.08, z: -40.7 },
-  sunsetFinishZ: -40.4,
+  barrierCenter: { x: streetX(9.2), z: -15.6 },
+  turn2Pos: { x: streetX(14), z: -15.6 },
+  stallLightPos: { x: streetX(11.55), y: 2.25, z: streetZ(-23.6) },
+  catPos: { x: streetX(12.83), y: 0.08, z: streetZ(-23.6) },
+  signalPolePos: { x: streetX(15.55), y: 0.08, z: streetZ(-41.25) },
+  crosswalkCenterX: streetX(14),
+  crosswalkPromptZ: streetZ(-40.85),
+  crosswalkCurbZ: streetZ(-41.68),
+  crosswalkHalfWidth: 1.85 * 1.4,
+  pedestrianPos: { x: streetX(14), y: 0.08, z: streetZ(-52.7) },
+  sunsetFinishZ: streetZ(-52.4),
 };
 
+export const CROSSWALK_ROAD = {
+  nearCurbZ: streetZ(-41.85),
+  farCurbZ: streetZ(-51.75),
+  eastboundZ: streetZ(-44.9),
+  westboundZ: streetZ(-48.7),
+  spawnOffsetX: 26,
+  retireOffsetX: 30,
+};
+
+export const STREET = {
+  manhole: { x: 0.244, z: -10.8, radius: 0.34 },
+  puddle: { x: streetX(13.36), z: streetZ(-20.4), rx: 0.62, rz: 0.96 },
+  gapStartX: streetX(9.6), gapEndZ: -18.2,
+  stop: { minX: streetX(13.65), maxX: streetX(16.78), minZ: streetZ(-40.65), maxZ: streetZ(-36.2) },
+  busLane: { x: streetX(18.05), stopZ: streetZ(-38.2) },
+};
+
+export function puddleRadius(angle: number): number {
+  return 1 + 0.08 * Math.cos(3 * angle) + 0.065 * Math.sin(5 * angle) + 0.035 * Math.sin(8 * angle);
+}
+
+export function isNearPuddle(x: number, z: number, margin: number): boolean {
+  const { puddle } = STREET;
+  const u = (x - puddle.x) / (puddle.rx + margin);
+  const v = (z - puddle.z) / (puddle.rz + margin);
+  const distanceSquared = u * u + v * v;
+  return distanceSquared < 1.44 && distanceSquared <= puddleRadius(Math.atan2(v, u)) ** 2;
+}
+
+export function groundFeature(x: number, z: number): 'manhole' | 'puddle' | null {
+  const { manhole } = STREET;
+  if ((x - manhole.x) ** 2 + (z - manhole.z) ** 2 <= manhole.radius ** 2) return 'manhole';
+  return isNearPuddle(x, z, 0) ? 'puddle' : null;
+}
+
+export const streetFixtures = [
+  { id: 'guide_rail_east', x: streetX(10.1), z: -17.35, width: 4.3, depth: 0.06, height: 0.9, tag: 'guardrail' },
+  { id: 'guide_rail_north', x: streetX(12.25), z: -18.32, width: 0.06, depth: 2, height: 0.9, tag: 'guardrail' },
+  { id: 'bus_post_a', x: streetX(15.12), z: streetZ(-37.25), width: 0.12, depth: 0.12, height: 2.35, tag: 'bus_stop' },
+  { id: 'bus_back_panel', x: streetX(15.12), z: STREET.busLane.stopZ, width: 0.06, depth: 1.88, height: 1.45, tag: 'bus_stop' },
+  { id: 'bus_post_b', x: streetX(15.12), z: streetZ(-39.15), width: 0.12, depth: 0.12, height: 2.35, tag: 'bus_stop' },
+] as const;
+
 export function isOnTactilePath(x: number, z: number): boolean {
-  // Entry dot pad + Leg 1 (-Z along X=0)
+  const offset = Math.abs(x - WAYPOINTS.crosswalkCenterX);
   if (z <= -5.6 && z >= -16.1 && Math.abs(x) < 0.52) return true;
-  // Leg 2 (+X along Z=-15.6)
-  if (x >= -0.48 && x <= 14.5 && Math.abs(z - -15.6) < 0.52) return true;
-  // Leg 3 (-Z along X=14.0)
-  if (z <= -15.1 && z >= -29.75 && Math.abs(x - 14.0) < 0.52) return true;
-  // Wide crosswalk stop dot pad
-  if (z <= -28.8 && z >= -29.82 && Math.abs(x - 14.0) < 1.85) return true;
-  // Opposite curb dot pad & continuation
-  if (z <= -39.8 && z >= -43.8 && Math.abs(x - 14.0) < 1.85) return true;
-  return false;
+  if (x >= -0.48 && x <= STREET.gapStartX && Math.abs(z + 15.6) < 0.52) return true;
+  if (z <= STREET.gapEndZ && z >= streetZ(-41.75) && offset < 0.52) return true;
+  if (z <= streetZ(-40.8) && z >= streetZ(-41.82) && offset < WAYPOINTS.crosswalkHalfWidth) return true;
+  return z <= streetZ(-51.8) && z >= streetZ(-55.8) && offset < WAYPOINTS.crosswalkHalfWidth;
 }
 
 export function createInitialBeacons(): AcousticBeacon[] {
@@ -180,7 +228,7 @@ export function createInitialBeacons(): AcousticBeacon[] {
       label: '路口车流',
       x: WAYPOINTS.crosswalkCenterX,
       y: 0.8,
-      z: -34.0,
+      z: streetZ(-46),
       color: 'amber',
       radius: 15,
       active: true,
@@ -235,6 +283,13 @@ export function createInitialMicroInteractions(): MicroInteraction[] {
 
 export function createInitialColliders(): ColliderBox[] {
   return [
+    ...streetFixtures.map(f => ({
+      id: f.id, minX: f.x - f.width / 2, maxX: f.x + f.width / 2,
+      minZ: f.z - f.depth / 2, maxZ: f.z + f.depth / 2,
+      height: f.height, tag: f.tag, enabled: true,
+    })),
+    { id: 'boarding_boundary', minX: streetX(9.4), maxX: streetX(18), minZ: STREET.stop.minZ - 0.15, maxZ: STREET.stop.minZ + 0.1,
+      height: 1, tag: 'normal', enabled: true },
     // === Scene 1: Dim Foyer (Z = +2.4 to -5.5, X = -1.9 to +1.9) ===
     {
       id: 'foyer_back_wall',
@@ -334,7 +389,7 @@ export function createInitialColliders(): ColliderBox[] {
     {
       id: 'leg2_north_wall',
       minX: -4.2,
-      maxX: 9.85,
+      maxX: streetX(9.85),
       minZ: -18.65,
       maxZ: -18.2,
       height: 6.0,
@@ -345,53 +400,58 @@ export function createInitialColliders(): ColliderBox[] {
     {
       id: 'leg2_south_guardrail',
       minX: 2.55,
-      maxX: 17.05,
+      maxX: streetX(17.05),
       minZ: -12.6,
       maxZ: -12.2,
       height: 1.2,
       tag: 'wall',
       enabled: true,
     },
-    // Leg 3 West Building Facade (X = 9.85, Z = -18.2 to -30.0)
+    // Leg 3 West Building Facade (X = 9.85, Z = -18.2 to -42.0)
     {
       id: 'leg3_west_wall',
-      minX: 9.35,
-      maxX: 9.85,
-      minZ: -30.0,
+      minX: streetX(9.35),
+      maxX: streetX(9.85),
+      minZ: streetZ(-42.0),
       maxZ: -18.2,
       height: 6.0,
       tag: 'wall',
       enabled: true,
     },
-    // Leg 3 West Crosswalk & Plaza Bound (X = 9.85, Z = -30.0 to -44.2)
+    // Leg 3 West Crosswalk & Plaza Bound (X = 9.85, Z = -42.0 to -56.2)
     {
       id: 'leg3_west_crosswalk_bound',
-      minX: 9.35,
-      maxX: 9.85,
-      minZ: -44.2,
-      maxZ: -30.0,
+      minX: streetX(9.35),
+      maxX: streetX(9.85),
+      minZ: streetZ(-56.2),
+      maxZ: streetZ(-42.0),
       height: 1.4,
       tag: 'wall',
       enabled: true,
     },
-    // Leg 3 East Guardrail & Crosswalk East Bound (X = 16.65, Z = -12.2 to -44.2)
+    // Leg 3 East Guardrail & Crosswalk East Bound (X = 16.65, Z = -12.2 to -56.2)
     {
       id: 'leg3_east_guardrail',
-      minX: 16.65,
-      maxX: 17.05,
-      minZ: -44.2,
+      minX: streetX(16.65),
+      maxX: streetX(17.05),
+      minZ: streetZ(-36.2),
       maxZ: -12.2,
       height: 1.4,
       tag: 'wall',
       enabled: true,
     },
+    // Open rail at the shelter. The kerb edge still keeps walkers out of the live bus lane.
+    { id: 'platform_kerb', minX: streetX(16.85), maxX: streetX(17.05), minZ: streetZ(-40.4), maxZ: streetZ(-36.2),
+      height: 0.12, tag: 'normal', enabled: true },
+    { id: 'crosswalk_east_bound', minX: streetX(16.65), maxX: streetX(17.05), minZ: streetZ(-56.2), maxZ: streetZ(-40.4),
+      height: 1.2, tag: 'wall', enabled: true },
     // Opposite Safe Sidewalk Far End Boundary
     {
       id: 'street_end_boundary',
-      minX: 9.35,
-      maxX: 17.1,
-      minZ: -44.3,
-      maxZ: -43.8,
+      minX: streetX(9.35),
+      maxX: streetX(17.1),
+      minZ: streetZ(-56.3),
+      maxZ: streetZ(-55.8),
       height: 2.0,
       tag: 'wall',
       enabled: true,
@@ -413,8 +473,8 @@ export function createInitialColliders(): ColliderBox[] {
     // Construction Barrier across X = 9.2, Z = -15.6 (North gap 1.68m, South gap 2.08m!)
     {
       id: 'construction_barrier',
-      minX: 8.8,
-      maxX: 9.6,
+      minX: streetX(8.8),
+      maxX: streetX(9.6),
       minZ: -16.52,
       maxZ: -14.68,
       height: 1.15,
@@ -446,30 +506,30 @@ export function createInitialColliders(): ColliderBox[] {
     },
     {
       id: 'street_lamp_3',
-      minX: 16.0,
-      maxX: 16.3,
-      minZ: -20.65,
-      maxZ: -20.35,
+      minX: streetX(16.0),
+      maxX: streetX(16.3),
+      minZ: streetZ(-20.65),
+      maxZ: streetZ(-20.35),
       height: 4.2,
       tag: 'normal',
       enabled: true,
     },
     {
       id: 'street_lamp_4',
-      minX: 16.0,
-      maxX: 16.3,
-      minZ: -26.85,
-      maxZ: -26.55,
+      minX: streetX(16.0),
+      maxX: streetX(16.3),
+      minZ: streetZ(-26.85),
+      maxZ: streetZ(-26.55),
       height: 4.2,
       tag: 'normal',
       enabled: true,
     },
     {
       id: 'crosswalk_signal_pole',
-      minX: 15.4,
-      maxX: 15.7,
-      minZ: -29.4,
-      maxZ: -29.1,
+      minX: streetX(15.4),
+      maxX: streetX(15.7),
+      minZ: streetZ(-41.4),
+      maxZ: streetZ(-41.1),
       height: 3.4,
       tag: 'signal_pole',
       enabled: true,
@@ -478,40 +538,40 @@ export function createInitialColliders(): ColliderBox[] {
     // === Scene 3 (Leg 3): Warm Breakfast Stall & Tabby Cat ===
     {
       id: 'breakfast_stall_counter',
-      minX: 9.85,
-      maxX: 11.82,
-      minZ: -25.3,
-      maxZ: -21.9,
+      minX: streetX(9.85),
+      maxX: streetX(11.82),
+      minZ: streetZ(-25.3),
+      maxZ: streetZ(-21.9),
       height: 2.4,
       tag: 'stall',
       enabled: true,
     },
     {
       id: 'stall_stool_1',
-      minX: 11.92,
-      maxX: 12.32,
-      minZ: -23.25,
-      maxZ: -22.85,
+      minX: streetX(11.92),
+      maxX: streetX(12.32),
+      minZ: streetZ(-23.25),
+      maxZ: streetZ(-22.85),
       height: 0.48,
       tag: 'stall',
       enabled: true,
     },
     {
       id: 'stall_stool_2',
-      minX: 11.92,
-      maxX: 12.32,
-      minZ: -24.35,
-      maxZ: -23.95,
+      minX: streetX(11.92),
+      maxX: streetX(12.32),
+      minZ: streetZ(-24.35),
+      maxZ: streetZ(-23.95),
       height: 0.48,
       tag: 'stall',
       enabled: true,
     },
     {
       id: 'street_cat',
-      minX: 12.86,
-      maxX: 13.3,
-      minZ: -23.82,
-      maxZ: -23.38,
+      minX: WAYPOINTS.catPos.x - 0.22,
+      maxX: WAYPOINTS.catPos.x + 0.22,
+      minZ: streetZ(-23.82),
+      maxZ: streetZ(-23.38),
       height: 0.42,
       tag: 'cat',
       enabled: true,
@@ -520,9 +580,9 @@ export function createInitialColliders(): ColliderBox[] {
     // === Scene 4: Crosswalk Safety Air-Wall (Thick 1.2m so player stops cleanly on dot bricks!) ===
     {
       id: 'crosswalk_airwall',
-      minX: 9.4,
-      maxX: 18.6,
-      minZ: -30.9,
+      minX: streetX(9.4),
+      maxX: streetX(18.6),
+      minZ: streetZ(-42.9),
       maxZ: WAYPOINTS.crosswalkCurbZ,
       height: 1.8,
       tag: 'tactile_dot',

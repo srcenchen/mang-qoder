@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-import { ColliderBox, SurfaceTag, WAYPOINTS } from './levelData';
+import { ColliderBox, CROSSWALK_ROAD, STREET, puddleRadius, streetFixtures, streetX, streetZ, SurfaceTag, WAYPOINTS } from './levelData';
 import { createProceduralTextures } from './textures';
+import { createStreetModelFactories } from './streetModels';
 import { EchoShaderManager } from '../shaders/echoMaterial';
 
 export interface TrafficVisual {
@@ -8,6 +9,8 @@ export interface TrafficVisual {
   direction: 1 | -1;
   speed: number;
   laneZ: number;
+  spawnX: number;
+  retireX: number;
   active: boolean;
 }
 
@@ -34,6 +37,10 @@ export interface BuiltSceneResult {
   doorShaftMesh: THREE.Mesh;
   canePickupGroup: THREE.Group;
   catGroup: THREE.Group;
+  petCat: () => void;
+  resetCat: () => void;
+  busVehicle: THREE.Group;
+  setBusRoute: (route: 7 | 12) => void;
   catPointLight: THREE.PointLight;
   stallPointLight: THREE.PointLight;
   barrierBeaconLight: THREE.PointLight;
@@ -65,6 +72,7 @@ export interface BuiltSceneResult {
 
 function tagObjectTree(obj: THREE.Object3D, tag: SurfaceTag): void {
   obj.userData.surfaceTag = tag;
+  obj.userData.materialTag = tag;
   obj.traverse((child) => {
     child.userData.surfaceTag = tag;
   });
@@ -208,35 +216,136 @@ function createBacklitSilhouetteMaterial(): THREE.ShaderMaterial {
   });
 }
 
-function createTabbyFurTexture(): THREE.CanvasTexture {
-  const c = document.createElement('canvas');
-  c.width = 256;
-  c.height = 256;
-  const ctx = c.getContext('2d')!;
-  ctx.fillStyle = '#7e6c5a';
-  ctx.fillRect(0, 0, 256, 256);
+function createCrosswalkStripe(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  // Match the source size before the boot renderer allocates GPU storage.
+  canvas.width = 1024;
+  canvas.height = 254;
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  const image = new Image();
+  image.onload = () => {
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const rgba = pixels.data;
+    for (let i = 0; i < rgba.length; i += 4) {
+      const luma = 0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2];
+      const t = THREE.MathUtils.clamp((luma - 68) / (155 - 68), 0, 1);
+      rgba[i + 3] = Math.round(t * t * (3 - 2 * t) * 235);
+    }
+    ctx.putImageData(pixels, 0, 0);
+    texture.needsUpdate = true;
+  };
+  image.src = new URL('crosswalk_stripe.jpg', document.baseURI).href;
+  return texture;
+}
 
-  // Subtle dark tabby mackerel stripes
-  ctx.strokeStyle = 'rgba(34, 26, 20, 0.58)';
-  ctx.lineWidth = 10;
-  for (let y = 14; y < 256; y += 28) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.bezierCurveTo(85, y + 10, 170, y - 10, 256, y + 4);
-    ctx.stroke();
+function createPuddleSurface() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 384;
+  const ctx = canvas.getContext('2d')!;
+  const pixels = ctx.createImageData(canvas.width, canvas.height);
+  const extent = 1.2;
+  const drops = [[-0.38, -0.29], [0.19, 0.46], [0.48, -0.48], [0.06, -0.06]];
+  for (let y = 0; y < canvas.height; y++) for (let x = 0; x < canvas.width; x++) {
+    const u = (x / (canvas.width - 1) * 2 - 1) * extent;
+    const v = (y / (canvas.height - 1) * 2 - 1) * extent;
+    const edge = puddleRadius(Math.atan2(v, u)) - Math.hypot(u, v);
+    if (edge <= 0) continue;
+    const t = Math.min(1, edge / 0.24);
+    let rings = 0;
+    for (const [dx, dz] of drops) {
+      const r = Math.hypot((u - dx) * STREET.puddle.rx, (v - dz) * STREET.puddle.rz);
+      if (r < 0.29) rings += Math.exp(-r * 7) * Math.max(0, Math.cos(r * 125)) ** 8;
+    }
+    const i = (y * canvas.width + x) * 4;
+    pixels.data[i] = 86 + rings * 72;
+    pixels.data[i + 1] = 107 + rings * 67;
+    pixels.data[i + 2] = 120 + rings * 62;
+    pixels.data[i + 3] = Math.round((119 + 19 * rings) * t * t * (3 - 2 * t));
   }
-  // Fine fur speckles
-  for (let i = 0; i < 1400; i++) {
-    const x = (i * 53) % 256;
-    const y = (i * 97) % 256;
-    ctx.fillStyle = i % 2 === 0 ? 'rgba(180,158,132,0.16)' : 'rgba(30,22,16,0.16)';
-    ctx.fillRect(x, y, 2, 4);
+  ctx.putImageData(pixels, 0, 0);
+  const map = new THREE.CanvasTexture(canvas);
+  map.colorSpace = THREE.SRGBColorSpace;
+
+  const { rx, rz } = STREET.puddle;
+  const outline = new THREE.Shape();
+  for (let i = 0; i < 64; i++) {
+    const angle = i / 64 * Math.PI * 2;
+    const r = puddleRadius(angle);
+    const x = Math.cos(angle) * r * rx;
+    const y = -Math.sin(angle) * r * rz;
+    if (i === 0) outline.moveTo(x, y);
+    else outline.lineTo(x, y);
   }
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  return tex;
+  outline.closePath();
+  const geometry = new THREE.ShapeGeometry(outline);
+  const position = geometry.attributes.position;
+  const uv = geometry.attributes.uv;
+  for (let i = 0; i < uv.count; i++) {
+    uv.setXY(i, 0.5 + position.getX(i) / (2 * rx * extent), 0.5 + position.getY(i) / (2 * rz * extent));
+  }
+  geometry.rotateX(-Math.PI / 2);
+  return { map, geometry };
+}
+
+function createCatAtlas(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 1056;
+  const atlas = new THREE.CanvasTexture(canvas);
+  atlas.colorSpace = THREE.SRGBColorSpace;
+  atlas.minFilter = atlas.magFilter = THREE.LinearFilter;
+  atlas.generateMipmaps = false;
+  atlas.repeat.set(1 / 3, 1 / 3);
+  atlas.offset.set(0, 2 / 3);
+  const image = new Image();
+  image.onload = () => {
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(image, 0, 0);
+    const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const rgba = pixels.data;
+    for (let i = 0; i < rgba.length; i += 4) {
+      const neutral = Math.max(rgba[i], rgba[i + 2]);
+      const excess = rgba[i + 1] - neutral;
+      if (rgba[i + 1] > 110 && excess > 38) {
+        const t = Math.min(1, (excess - 38) / 60);
+        rgba[i + 3] = Math.round(255 * (1 - t * t * (3 - 2 * t)));
+      }
+      if (excess > 0) rgba[i + 1] = neutral;
+    }
+    ctx.putImageData(pixels, 0, 0);
+    atlas.needsUpdate = true;
+  };
+  image.src = new URL('cat_sprite_3x3.jpg', document.baseURI).href;
+  return atlas;
+}
+
+function createIronTread(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 256;
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = '#b8bdc5';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let y = 0; y <= 256; y += 28) {
+    for (let x = (y % 56 ? 14 : 0); x <= 256; x += 28) {
+      for (const offset of [2, 0]) {
+        ctx.strokeStyle = offset ? '#777e88' : '#f3f4f6';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(x - 6, y - 6 + offset); ctx.lineTo(x + 6, y + 6 + offset);
+        ctx.moveTo(x + 6, y - 6 + offset); ctx.lineTo(x - 6, y + 6 + offset);
+        ctx.stroke();
+      }
+    }
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
 }
 
 export function buildGameScene(
@@ -287,8 +396,8 @@ export function buildGameScene(
 
   // Main Shadow-Casting Low-Angle Sunset Key Light (pours down -Z urban canyon centered on Leg 3 / Crosswalk!)
   const sunsetDirLight = new THREE.DirectionalLight('#ff9a3c', 0.25);
-  sunsetDirLight.position.set(15.5, 9.0, -64);
-  sunsetDirLight.target.position.set(10, 0, -24);
+  sunsetDirLight.position.set(streetX(15.5), 9.0, streetZ(-64));
+  sunsetDirLight.target.position.set(streetX(10), 0, streetZ(-24));
   sunsetDirLight.castShadow = true;
   sunsetDirLight.shadow.mapSize.set(1024, 1024);
   sunsetDirLight.shadow.camera.near = 2;
@@ -381,12 +490,12 @@ export function buildGameScene(
     new THREE.MeshStandardMaterial({
       map: tex.wetAsphalt.map,
       normalMap: tex.wetAsphalt.normalMap,
-      normalScale: new THREE.Vector2(0.85, 0.85),
+      normalScale: new THREE.Vector2(0.30, 0.30),
       roughnessMap: tex.wetAsphalt.roughnessMap,
       roughness: 0.36,
       metalness: 0.2,
     }),
-    { isWetGround: true }
+    { isWetGround: true, sparseWetPatches: true }
   );
 
   const matTactileLine = echoManager.enhanceMaterial(
@@ -415,12 +524,13 @@ export function buildGameScene(
 
   const matCrosswalkBar = echoManager.enhanceMaterial(
     new THREE.MeshStandardMaterial({
-      map: tex.crosswalk.map,
-      normalMap: tex.crosswalk.normalMap,
-      normalScale: new THREE.Vector2(0.8, 0.8),
-      roughnessMap: tex.crosswalk.roughnessMap,
-      roughness: 0.36,
-      metalness: 0.14,
+      map: createCrosswalkStripe(),
+      transparent: true,
+      depthWrite: false,
+      roughness: 0.72,
+      metalness: 0.05,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
     }),
     { isWetGround: true }
   );
@@ -774,14 +884,14 @@ export function buildGameScene(
   reflectiveGroundMeshes.push(sidewalkLeg1);
 
   // Leg 2 Sidewalk: X in [+2.6, +16.7] (w=14.1), Z in [-18.4, -12.6] (d=5.8)
-  const sidewalkLeg2 = new THREE.Mesh(makeTiledBoxGeo(14.1, 0.08, 5.8, 2.2, 2.2), matWetSidewalk);
-  sidewalkLeg2.position.set(9.65, 0.04, -15.5);
+  const sidewalkLeg2 = new THREE.Mesh(makeTiledBoxGeo(streetX(16.7) - 2.6, 0.08, 5.8, 2.2, 2.2), matWetSidewalk);
+  sidewalkLeg2.position.set((streetX(16.7) + 2.6) / 2, 0.04, -15.5);
   registerTarget(sidewalkLeg2, 'normal', false, true);
   reflectiveGroundMeshes.push(sidewalkLeg2);
 
   // Leg 3 Sidewalk: X in [+9.8, +16.7] (w=6.9), Z in [-29.8, -18.4] (d=11.4)
-  const sidewalkLeg3 = new THREE.Mesh(makeTiledBoxGeo(6.9, 0.08, 11.4, 2.2, 2.2), matWetSidewalk);
-  sidewalkLeg3.position.set(13.25, 0.04, -24.1);
+  const sidewalkLeg3 = new THREE.Mesh(makeTiledBoxGeo(6.9, 0.08, -18.4 - streetZ(-41.8), 2.2, 2.2), matWetSidewalk);
+  sidewalkLeg3.position.set(streetX(13.25), 0.04, (-18.4 + streetZ(-41.8)) / 2);
   registerTarget(sidewalkLeg3, 'normal', false, true);
   reflectiveGroundMeshes.push(sidewalkLeg3);
 
@@ -790,12 +900,12 @@ export function buildGameScene(
   curbLeg1East.position.set(2.68, 0.06, -9.05);
   registerTarget(curbLeg1East, 'normal', true, true);
 
-  const curbLeg2South = new THREE.Mesh(new THREE.BoxGeometry(14.3, 0.12, 0.2), matStoneCurb);
-  curbLeg2South.position.set(9.75, 0.06, -12.52);
+  const curbLeg2South = new THREE.Mesh(makeTiledBoxGeo(streetX(16.9) - 2.6, 0.12, 0.2, 2.2, 2.2), matStoneCurb);
+  curbLeg2South.position.set((streetX(16.9) + 2.6) / 2, 0.06, -12.52);
   registerTarget(curbLeg2South, 'normal', true, true);
 
-  const curbLeg3East = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.12, 17.4), matStoneCurb);
-  curbLeg3East.position.set(16.78, 0.06, -21.2);
+  const curbLeg3East = new THREE.Mesh(makeTiledBoxGeo(0.2, 0.12, -12.5 - streetZ(-41.9), 2.2, 2.2), matStoneCurb);
+  curbLeg3East.position.set(streetX(16.78), 0.06, (-12.5 + streetZ(-41.9)) / 2);
   registerTarget(curbLeg3East, 'normal', true, true);
 
   // Storm drain grates along curbs
@@ -807,7 +917,7 @@ export function buildGameScene(
     [17.05, -27.5, 0],
   ] as [number, number, number][]) {
     const grate = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.018, 0.56), matDarkIron);
-    grate.position.set(gx, 0.008, gz);
+    grate.position.set(streetX(gx), 0.008, streetZ(gz));
     grate.rotation.y = rotY;
     scene.add(grate);
   }
@@ -830,24 +940,64 @@ export function buildGameScene(
   registerTarget(turn1DotPad, 'tactile_dot', false, true);
   reflectiveGroundMeshes.push(turn1DotPad);
 
-  // Leg 2 horizontal guiding bricks (+X along Z = -15.6, X = +0.48 to +13.52, len = 13.04m)
-  const tactileLeg2 = new THREE.Mesh(makeTiledBoxGeo(0.48, 0.024, 13.04, 0.48, 0.48), matTactileLine);
+  // Across the second turn, 4.4 m eastward plus 2.6 m northward have no paving.
+  const leg2Length = STREET.gapStartX - 0.48;
+  const tactileLeg2 = new THREE.Mesh(makeTiledBoxGeo(0.48, 0.024, leg2Length, 0.48, 0.48), matTactileLine);
   tactileLeg2.rotation.y = Math.PI / 2;
-  tactileLeg2.position.set(7.0, 0.092, -15.6);
+  tactileLeg2.position.set(0.48 + leg2Length / 2, 0.092, -15.6);
   registerTarget(tactileLeg2, 'tactile_line', false, true);
   reflectiveGroundMeshes.push(tactileLeg2);
 
-  // Turn #2 Yellow 5x5 Blister-Dot Turning Pad at (14.0, -15.6)
-  const turn2DotPad = new THREE.Mesh(makeTiledBoxGeo(0.96, 0.024, 0.96, 0.48, 0.48), matTactileDot);
-  turn2DotPad.position.set(WAYPOINTS.turn2Pos.x, 0.092, WAYPOINTS.turn2Pos.z);
-  registerTarget(turn2DotPad, 'tactile_dot', false, true);
-  reflectiveGroundMeshes.push(turn2DotPad);
-
-  // Leg 3 straight guiding bricks (-Z along X = 14.0, Z = -16.08 to -28.85, len = 12.77m)
-  const tactileLeg3 = new THREE.Mesh(makeTiledBoxGeo(0.48, 0.024, 12.77, 0.48, 0.48), matTactileLine);
-  tactileLeg3.position.set(14.0, 0.092, -22.465);
+  const leg3Length = STREET.gapEndZ - WAYPOINTS.crosswalkPromptZ;
+  const tactileLeg3 = new THREE.Mesh(makeTiledBoxGeo(0.48, 0.024, leg3Length, 0.48, 0.48), matTactileLine);
+  tactileLeg3.position.set(WAYPOINTS.crosswalkCenterX, 0.092, STREET.gapEndZ - leg3Length / 2);
   registerTarget(tactileLeg3, 'tactile_line', false, true);
   reflectiveGroundMeshes.push(tactileLeg3);
+
+  const disk = new THREE.CylinderGeometry(1, 1, 1, 32);
+  const { manhole, puddle } = STREET;
+  const tread = createIronTread();
+  const castIron = echoManager.enhanceMaterial(new THREE.MeshStandardMaterial({
+    color: '#3a3f47', map: tread, bumpMap: tread, bumpScale: 0.012,
+    roughness: 0.61, metalness: 0.38, emissive: '#30353d', emissiveMap: tread, emissiveIntensity: 0.58,
+  }));
+  const cover = new THREE.Mesh(disk, castIron);
+  cover.scale.set(manhole.radius, 0.014, manhole.radius);
+  cover.position.set(manhole.x, 0.108, manhole.z);
+  registerTarget(cover, 'manhole', false);
+  const puddleSurface = createPuddleSurface();
+  const shallowWater = echoManager.enhanceMaterial(
+    new THREE.MeshStandardMaterial({
+      map: puddleSurface.map, transparent: true, depthWrite: false,
+      roughness: 0.06, metalness: 0.35,
+    }),
+    { isWetGround: true, puddleFeedback: true }
+  );
+  const water = new THREE.Mesh(puddleSurface.geometry, shallowWater);
+  water.position.set(puddle.x, 0.107, puddle.z);
+  registerTarget(water, 'puddle', false);
+  reflectiveGroundMeshes.push(water);
+
+  const streetModels = createStreetModelFactories(echoManager);
+  const fixtureBox = new THREE.BoxGeometry(1, 1, 1);
+  for (const f of streetFixtures) {
+    if (f.tag === 'bus_stop') continue;
+    const mesh = new THREE.Mesh(fixtureBox, matSecurityMetal);
+    mesh.scale.set(f.width, 0.07, f.depth);
+    mesh.position.set(f.x, 0.08 + f.height, f.z);
+    registerTarget(mesh, f.tag);
+    const lowerBar = mesh.clone();
+    lowerBar.position.y = 0.52;
+    registerTarget(lowerBar, f.tag);
+    for (const end of [-0.45, 0, 0.45]) {
+      const post = new THREE.Mesh(fixtureBox, matSecurityMetal);
+      post.scale.set(0.06, f.height, 0.06);
+      post.position.set(f.x + f.width * end, 0.08 + f.height / 2, f.z + f.depth * end);
+      registerTarget(post, f.tag);
+    }
+  }
+  const busShelter = streetModels.createBusShelter(STREET.busLane.x - 2.93, STREET.busLane.stopZ, matWarmWood);
+  registerTarget(busShelter, 'bus_stop');
 
   // =========================================================================
   // SOLID MULTI-STORY URBAN ARCHITECTURE & 360° HORIZON SKYLINE (NO PAPER WALLS!)
@@ -978,14 +1128,14 @@ export function buildGameScene(
   });
 
   // Leg 2 North Corner Shophouse (X in [-10.5, +9.8], Z in [-25.5, -18.3])
-  addSolidBuilding(-0.35, -21.9, 20.3, 11.4, 7.2, matBrickWall, {
+  addSolidBuilding((-10.5 + streetX(9.8)) / 2, -21.9, streetX(9.8) + 10.5, 11.4, 7.2, matBrickWall, {
     windowFace: '+z',
     shutters: true,
     registerWall: true,
   });
 
   // Leg 3 West Shophouse (X in [3.0, +9.8], Z in [-30.0, -18.3]) — hosts 24H Convenience Store & Breakfast Stall!
-  addSolidBuilding(6.4, -24.15, 6.8, 10.2, 11.7, matBrickWall, {
+  addSolidBuilding(streetX(9.8) - 3.4, (-18.3 + streetZ(-42)) / 2, 6.8, 10.2, -18.3 - streetZ(-42), matBrickWall, {
     windowFace: '+x',
     shutters: false,
     registerWall: true,
@@ -997,26 +1147,26 @@ export function buildGameScene(
     color: new THREE.Color(1.22, 1.18, 1.12),
   });
   const convSign = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.72, 3.2), convSignMat);
-  convSign.position.set(9.92, 3.22, -19.8);
+  convSign.position.set(streetX(9.92), 3.22, streetZ(-19.8));
   scene.add(convSign);
 
   const convShutter = new THREE.Mesh(new THREE.BoxGeometry(0.14, 2.65, 3.0), matShutter);
-  convShutter.position.set(9.86, 1.4, -19.8);
+  convShutter.position.set(streetX(9.86), 1.4, streetZ(-19.8));
   registerTarget(convShutter, 'wall', true, true);
 
   const convLight = new THREE.PointLight('#ffd699', 1.35, 7.2, 1.6);
-  convLight.position.set(10.55, 2.9, -19.8);
+  convLight.position.set(streetX(10.55), 2.9, streetZ(-19.8));
   scene.add(convLight);
 
   // Opposite-Road Enclosed Shophouses (Facing Leg 1 East, Leg 2 South, Leg 3 East!)
-  addSolidBuilding(11.6, -5.2, 11.0, 9.6, 8.8, matDarkConcrete, { windowFace: '-z' });
-  addSolidBuilding(26.2, -19.5, 7.6, 11.2, 22.0, matBrickWall, { windowFace: '-x' });
+  addSolidBuilding((6.1 + streetX(17.1)) / 2, -5.2, streetX(17.1) - 6.1, 9.6, 8.8, matDarkConcrete, { windowFace: '-z' });
+  addSolidBuilding(streetX(26.2), (-8.5 + streetZ(-42.5)) / 2, 7.6, 11.2, -8.5 - streetZ(-42.5), matBrickWall, { windowFace: '-x' });
 
   // Far Crosswalk Sunset Canyon Buildings (Framing the Golden Sunset along -Z at X = 14.0!)
-  addSolidBuilding(6.4, -46.5, 7.2, 12.2, 13.0, matBrickWall, { windowFace: '+x' });
-  addSolidBuilding(21.6, -46.5, 7.2, 12.6, 13.0, matBrickWall, { windowFace: '-x' });
-  addSolidBuilding(6.0, -59.5, 6.8, 16.5, 11.0, matDarkConcrete, { windowFace: '+x' });
-  addSolidBuilding(22.0, -59.5, 6.8, 15.8, 11.0, matDarkConcrete, { windowFace: '-x' });
+  addSolidBuilding(6.4 + streetX(14) - 14, streetZ(-58.5), 7.2, 12.2, 13.0, matBrickWall, { windowFace: '+x' });
+  addSolidBuilding(21.6 + streetX(14) - 14, streetZ(-58.5), 7.2, 12.6, 13.0, matBrickWall, { windowFace: '-x' });
+  addSolidBuilding(6.0 + streetX(14) - 14, streetZ(-71.5), 6.8, 16.5, 11.0, matDarkConcrete, { windowFace: '+x' });
+  addSolidBuilding(22.0 + streetX(14) - 14, streetZ(-71.5), 6.8, 15.8, 11.0, matDarkConcrete, { windowFace: '-x' });
 
   // 360° Perimeter Distant Urban Skyline Ring (14 varied-height towers — ZERO empty horizon in any direction!)
   const skylineSpecs: [number, number, number, number, number][] = [
@@ -1030,8 +1180,8 @@ export function buildGameScene(
     [32, 6, 12, 17, 14],
     [36, -12, 11, 19, 16],
     [36, -32, 12, 16, 16],
-    [34, -50, 13, 20, 15],
-    [-6, -56, 12, 19, 14],
+    [34, -69, 13, 20, 15],
+    [-6, -69, 12, 19, 14],
     [14, -76, 10, 11, 8], // Low distant silhouette block far down the sunset horizon
     [28, -68, 12, 18, 12],
   ];
@@ -1049,9 +1199,9 @@ export function buildGameScene(
     const pts = new THREE.QuadraticBezierCurve3(a, mid, b).getPoints(14);
     scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), cableMat));
   };
-  for (const cz of [-19.0, -27.5, -40.2]) {
-    addCableSpan(new THREE.Vector3(9.8, 6.2, cz), new THREE.Vector3(22.4, 6.3, cz));
-    addCableSpan(new THREE.Vector3(9.8, 6.65, cz), new THREE.Vector3(22.4, 6.75, cz));
+  for (const cz of [-19.0, -27.5, -41.2]) {
+    addCableSpan(new THREE.Vector3(streetX(9.8), 6.2, streetZ(cz)), new THREE.Vector3(streetX(22.4), 6.3, streetZ(cz)));
+    addCableSpan(new THREE.Vector3(streetX(9.8), 6.65, streetZ(cz)), new THREE.Vector3(streetX(22.4), 6.75, streetZ(cz)));
   }
   for (const cx of [3.5, 8.5]) {
     addCableSpan(new THREE.Vector3(cx, 6.2, -18.3), new THREE.Vector3(cx, 6.3, -9.6));
@@ -1078,10 +1228,9 @@ export function buildGameScene(
     scene.add(railGroup);
   };
   addGuardrail(2.65, -8.8, 5.4, 0);
-  addGuardrail(6.4, -12.55, 6.4, Math.PI / 2);
-  addGuardrail(13.2, -12.55, 5.6, Math.PI / 2);
-  addGuardrail(16.72, -16.6, 6.6, 0);
-  addGuardrail(16.72, -24.8, 6.8, 0);
+  addGuardrail((2.55 + streetX(17.05)) / 2, -12.55, streetX(17.05) - 2.55, Math.PI / 2);
+  addGuardrail(streetX(16.72), (-12.2 + streetZ(-36.2)) / 2, -12.2 - streetZ(-36.2));
+  addGuardrail(streetX(16.72), (streetZ(-40.4) + streetZ(-41.8)) / 2, streetZ(-40.4) - streetZ(-41.8));
 
   // =========================================================================
   // LEG 2 OBSTACLES: DETAILED SHARED BIKES & CONSTRUCTION BARRIER (Ref Image 2)
@@ -1264,7 +1413,7 @@ export function buildGameScene(
   ];
   for (const [lx, lz, rotY] of lampSpecs) {
     const poleGroup = new THREE.Group();
-    poleGroup.position.set(lx, 0.08, lz);
+    poleGroup.position.set(streetX(lx), 0.08, streetZ(lz));
     poleGroup.rotation.y = rotY;
 
     const poleBase = new THREE.Mesh(
@@ -1304,7 +1453,7 @@ export function buildGameScene(
     const lampLight = new THREE.PointLight('#ffbf69', 1.9, 9.5, 1.6);
     const worldArmX = lx + Math.cos(rotY) * -1.05;
     const worldArmZ = lz - Math.sin(rotY) * -1.05;
-    lampLight.position.set(worldArmX, 5.0, worldArmZ);
+    lampLight.position.set(streetX(lx) + (worldArmX - lx), 5.0, streetZ(lz) + (worldArmZ - lz));
     scene.add(lampLight);
 
     registerTarget(poleGroup, 'normal', true, true);
@@ -1332,7 +1481,7 @@ export function buildGameScene(
       lx = 10.4 + ((i * 2.37) % 6.2);
       lz = -18.2 - ((i * 2.63) % 11.4);
     }
-    leaf.position.set(lx, 0.09, lz);
+    leaf.position.set(streetX(lx), 0.09, streetZ(lz));
     scene.add(leaf);
   }
 
@@ -1340,7 +1489,7 @@ export function buildGameScene(
   // SCENE 3: WARM STREET-CORNER BREAKFAST STALL & TABBY CAT (Ref Image 3)
   // =========================================================================
   const stallGroup = new THREE.Group();
-  stallGroup.position.set(10.85, 0.08, -23.6);
+  stallGroup.position.set(streetX(10.85), 0.08, WAYPOINTS.stallLightPos.z);
 
   const counterBase = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.96, 3.1), matWarmWood);
   counterBase.position.set(-0.1, 0.48, 0);
@@ -1435,7 +1584,7 @@ export function buildGameScene(
     stallGroup.add(lid);
 
     const puff = new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 8), steamMat);
-    puff.position.set(10.85 + st.x, 1.25 + st.tiers * 0.135, -23.6 + st.z);
+    puff.position.set(streetX(10.85) + st.x, 1.25 + st.tiers * 0.135, WAYPOINTS.stallLightPos.z + st.z);
     puff.userData.baseY = puff.position.y;
     puff.userData.phase = st.z * 2.3;
     scene.add(puff);
@@ -1458,83 +1607,37 @@ export function buildGameScene(
   }
   registerTarget(stallGroup, 'stall', true, true);
 
-  // Refined Seated Tabby Street Cat (Ref Image 3 — rounded silhouette, tabby stripes, tucked paws!)
   const catGroup = new THREE.Group();
   catGroup.position.set(WAYPOINTS.catPos.x, WAYPOINTS.catPos.y, WAYPOINTS.catPos.z);
-  catGroup.rotation.y = 0.95;
+  const atlas = createCatAtlas();
+  const catMaterial = echoManager.enhanceMaterial(new THREE.MeshStandardMaterial({
+    map: atlas, transparent: true, alphaTest: 0.08, side: THREE.DoubleSide, depthWrite: false,
+    color: new THREE.Color('#ffe6c8').multiplyScalar(0.85), roughness: 0.88,
+    emissive: '#ffe6c8', emissiveMap: atlas, emissiveIntensity: 0.22 * 0.85,
+  }), { selfGlowBoost: 0.14 });
+  const catPlane = new THREE.Mesh(new THREE.PlaneGeometry(0.48, 0.48), catMaterial);
+  catPlane.position.y = 0.24;
+  catGroup.add(catPlane);
+  registerTarget(catGroup, 'cat', false, true);
+  const shadowCanvas = document.createElement('canvas');
+  shadowCanvas.width = shadowCanvas.height = 64;
+  const shadowCtx = shadowCanvas.getContext('2d')!;
+  const falloff = shadowCtx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  falloff.addColorStop(0, 'rgba(0,0,0,0.68)');
+  falloff.addColorStop(1, 'rgba(0,0,0,0)');
+  shadowCtx.fillStyle = falloff;
+  shadowCtx.fillRect(0, 0, 64, 64);
+  const contactShadow = new THREE.Mesh(new THREE.CircleGeometry(0.24, 24),
+    new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(shadowCanvas), transparent: true, depthWrite: false }));
+  contactShadow.rotation.x = -Math.PI / 2;
+  contactShadow.position.copy(catGroup.position);
+  contactShadow.position.y += 0.004;
+  contactShadow.renderOrder = -1;
+  scene.add(contactShadow);
 
-  const tabbyTex = createTabbyFurTexture();
-  const matCatFur = echoManager.enhanceMaterial(
-    new THREE.MeshStandardMaterial({ map: tabbyTex, roughness: 0.86 }),
-    { selfGlowBoost: 0.14 }
-  );
-  const matCatChest = echoManager.enhanceMaterial(
-    new THREE.MeshStandardMaterial({ color: '#e5dcd1', roughness: 0.86 }),
-    { selfGlowBoost: 0.14 }
-  );
-  const matCatEye = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.25, 1.5, 0.62) });
-
-  // Rounded seated haunches & sloped torso
-  const catHaunch = new THREE.Mesh(new THREE.SphereGeometry(0.125, 16, 14), matCatFur);
-  catHaunch.scale.set(0.95, 0.92, 1.12);
-  catHaunch.position.set(0, 0.115, -0.02);
-  catGroup.add(catHaunch);
-
-  const catTorso = new THREE.Mesh(new THREE.CapsuleGeometry(0.092, 0.14, 8, 14), matCatFur);
-  catTorso.position.set(0, 0.21, 0.025);
-  catTorso.rotation.x = 0.22;
-  catGroup.add(catTorso);
-
-  const catChest = new THREE.Mesh(new THREE.SphereGeometry(0.078, 12, 12), matCatChest);
-  catChest.scale.set(0.9, 1.15, 0.82);
-  catChest.position.set(0, 0.2, 0.072);
-  catGroup.add(catChest);
-
-  // Neat folded front legs & white paws
-  for (const px of [-0.042, 0.042]) {
-    const fLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.02, 0.16, 10), matCatFur);
-    fLeg.position.set(px, 0.09, 0.088);
-    catGroup.add(fLeg);
-    const paw = new THREE.Mesh(new THREE.SphereGeometry(0.024, 10, 8), matCatChest);
-    paw.scale.set(1.0, 0.65, 1.35);
-    paw.position.set(px, 0.018, 0.105);
-    catGroup.add(paw);
-  }
-
-  // Softly sculpted round head + muzzle + ears + eyes
-  const catHead = new THREE.Mesh(new THREE.SphereGeometry(0.094, 16, 14), matCatFur);
-  catHead.scale.set(1.04, 0.96, 0.98);
-  catHead.position.set(0, 0.34, 0.065);
-  catGroup.add(catHead);
-
-  const catMuzzle = new THREE.Mesh(new THREE.SphereGeometry(0.036, 10, 8), matCatChest);
-  catMuzzle.scale.set(1.15, 0.78, 0.95);
-  catMuzzle.position.set(0, 0.315, 0.14);
-  catGroup.add(catMuzzle);
-
-  for (const ex of [-0.036, 0.036]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.013, 10, 8), matCatEye);
-    eye.position.set(ex, 0.352, 0.146);
-    catGroup.add(eye);
-  }
-
-  for (const ex of [-0.056, 0.056]) {
-    const ear = new THREE.Mesh(new THREE.ConeGeometry(0.034, 0.072, 6), matCatFur);
-    ear.position.set(ex, 0.425, 0.058);
-    ear.rotation.z = ex < 0 ? 0.24 : -0.24;
-    catGroup.add(ear);
-  }
-
-  const tailCurve = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(0, 0.06, -0.11),
-    new THREE.Vector3(0.08, 0.04, -0.18),
-    new THREE.Vector3(0.14, 0.09, -0.12),
-    new THREE.Vector3(0.15, 0.15, -0.05),
-  ]);
-  const catTail = new THREE.Mesh(new THREE.TubeGeometry(tailCurve, 12, 0.018, 8, false), matCatFur);
-  catGroup.add(catTail);
-
-  registerTarget(catGroup, 'cat', true, true);
+  let petRemaining = 0, catRow = -1, frameAge = 0;
+  const petCat = () => { petRemaining = 6.2; };
+  const resetCat = () => { petRemaining = frameAge = 0; catRow = -1; };
 
   const catPointLight = new THREE.PointLight('#fbbf24', 0.0, 2.8, 1.6);
   catPointLight.position.set(WAYPOINTS.catPos.x, 0.45, WAYPOINTS.catPos.z);
@@ -1545,13 +1648,13 @@ export function buildGameScene(
   // =========================================================================
   const cx = WAYPOINTS.crosswalkCenterX; // 14.0
 
-  const curbDotWarning = new THREE.Mesh(makeTiledBoxGeo(3.6, 0.025, 0.94, 0.48, 0.48), matTactileDot);
-  curbDotWarning.position.set(cx, 0.084, -29.32);
+  const curbDotWarning = new THREE.Mesh(makeTiledBoxGeo(5.04, 0.025, 0.94, 0.48, 0.48), matTactileDot);
+  curbDotWarning.position.set(cx, 0.084, streetZ(-41.32));
   registerTarget(curbDotWarning, 'tactile_dot', false, true);
   reflectiveGroundMeshes.push(curbDotWarning);
 
   const nearCurbLip = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.09, 0.22), matStoneCurb);
-  nearCurbLip.position.set(cx - 0.75, 0.045, -29.85);
+  nearCurbLip.position.set(cx - 0.75, 0.045, CROSSWALK_ROAD.nearCurbZ);
   registerTarget(nearCurbLip, 'normal', true, true);
 
   // Near-Curb Silent Signal Pole (Interactable Micro-Interaction #3)
@@ -1568,38 +1671,39 @@ export function buildGameScene(
   nearPoleGroup.add(emptyBracket);
   registerTarget(nearPoleGroup, 'signal_pole', true, true);
 
-  // 8 Weathered White Zebra Crosswalk Bars (Ref Image 4!)
+  const stripeGeometry = new THREE.PlaneGeometry(5.04, 0.812);
+  stripeGeometry.rotateX(-Math.PI / 2);
   for (let i = 0; i < 8; i++) {
-    const barZ = -30.95 - i * 1.12;
-    const zebraBar = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.012, 0.58), matCrosswalkBar);
-    zebraBar.position.set(cx, 0.008, barZ);
+    const zebraBar = new THREE.Mesh(stripeGeometry, matCrosswalkBar);
+    zebraBar.position.set(cx, 0.008, streetZ(-42.7) - i * 1.21);
+    zebraBar.rotation.y = i % 2 ? Math.PI : 0;
     registerTarget(zebraBar, 'crosswalk', false, true);
     reflectiveGroundMeshes.push(zebraBar);
   }
 
   // Opposite Safe Sidewalk & Tactile Ramp
   const farCurbLip = new THREE.Mesh(new THREE.BoxGeometry(10.0, 0.09, 0.22), matStoneCurb);
-  farCurbLip.position.set(cx, 0.045, -39.75);
+  farCurbLip.position.set(cx, 0.045, CROSSWALK_ROAD.farCurbZ);
   registerTarget(farCurbLip, 'normal', true, true);
 
   const farSidewalk = new THREE.Mesh(makeTiledBoxGeo(11.0, 0.08, 7.0, 2.2, 2.2), matWetSidewalk);
-  farSidewalk.position.set(cx, 0.04, -43.3);
+  farSidewalk.position.set(cx, 0.04, streetZ(-55.3));
   registerTarget(farSidewalk, 'normal', false, true);
   reflectiveGroundMeshes.push(farSidewalk);
 
-  const farDotPad = new THREE.Mesh(makeTiledBoxGeo(3.6, 0.025, 0.88, 0.48, 0.48), matTactileDot);
-  farDotPad.position.set(cx, 0.084, -40.25);
+  const farDotPad = new THREE.Mesh(makeTiledBoxGeo(5.04, 0.025, 0.88, 0.48, 0.48), matTactileDot);
+  farDotPad.position.set(cx, 0.084, streetZ(-52.25));
   registerTarget(farDotPad, 'tactile_dot', false, true);
   reflectiveGroundMeshes.push(farDotPad);
 
   const farTactileLine = new THREE.Mesh(makeTiledBoxGeo(0.48, 0.024, 4.2, 0.48, 0.48), matTactileLine);
-  farTactileLine.position.set(cx, 0.092, -42.8);
+  farTactileLine.position.set(cx, 0.092, streetZ(-54.8));
   registerTarget(farTactileLine, 'tactile_line', false, true);
   reflectiveGroundMeshes.push(farTactileLine);
 
   // Opposite Crosswalk Pedestrian Signal Lamp
   const farSignalGroup = new THREE.Group();
-  farSignalGroup.position.set(cx + 1.95, 0.08, -40.05);
+  farSignalGroup.position.set(cx + 1.95, 0.08, streetZ(-52.05));
   const farPole = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.08, 3.6, 10), matDarkIron);
   farPole.position.y = 1.8;
   farSignalGroup.add(farPole);
@@ -1624,7 +1728,7 @@ export function buildGameScene(
   scene.add(farSignalGroup);
 
   const signalLight = new THREE.PointLight('#ff3b30', 1.8, 6.5, 1.5);
-  signalLight.position.set(cx + 1.95, 3.15, -39.5);
+  signalLight.position.set(cx + 1.95, 3.15, streetZ(-51.5));
   scene.add(signalLight);
 
   const setPedestrianSignalGreen = (isGreen: boolean) => {
@@ -1649,7 +1753,7 @@ export function buildGameScene(
       new THREE.CylinderGeometry(0.075, 0.095, 7.8, 10),
       matDarkIron
     );
-    utilityPole.position.set(cx + side * 2.4, 3.9, -40.7);
+    utilityPole.position.set(cx + side * 2.4, 3.9, streetZ(-52.7));
     scene.add(utilityPole);
   }
 
@@ -1657,7 +1761,7 @@ export function buildGameScene(
   const sunsetGodRays = new THREE.Group();
   for (let i = 0; i < 3; i++) {
     const shaft = createVolumetricCone(1.8, 5.4, 24, '#ffb257', 0.0);
-    shaft.position.set(cx + (i - 1) * 1.4, 8.2 - i * 0.4, -50);
+    shaft.position.set(cx + (i - 1) * 1.4, 8.2 - i * 0.4, streetZ(-62.0));
     shaft.rotation.x = -Math.PI / 2 + 0.28;
     sunsetGodRays.add(shaft);
   }
@@ -1748,7 +1852,7 @@ export function buildGameScene(
   scene.add(pedestrianGroup);
 
   const pedestrianHaloLight = new THREE.PointLight('#ffb347', 0.0, 9.5, 1.4);
-  pedestrianHaloLight.position.set(cx, 1.85, -40.5);
+  pedestrianHaloLight.position.set(cx, 1.85, streetZ(-52.5));
   scene.add(pedestrianHaloLight);
 
   // Kept as empty always-hidden placeholder for API compatibility (zero camera-blocking arm mesh!)
@@ -1785,53 +1889,28 @@ export function buildGameScene(
     updateEscortMotion,
   };
 
-  // --- High-Speed Crosswalk Traffic Light-Trails (Pre-allocated & Pre-compiled!) ---
+  const busVehicle = streetModels.createBusMesh();
+  const setBusRoute = busVehicle.setRoute;
+  busVehicle.rotation.y = -Math.PI / 2;
+  busVehicle.position.set(STREET.busLane.x, 0, STREET.busLane.stopZ);
+  busVehicle.visible = false;
+  scene.add(busVehicle);
+
+  // One reusable sedan per lane. Both are prewarmed with the bus before play.
   const trafficStreaks: TrafficVisual[] = [];
   const createTrafficStreak = (laneZ: number, dir: 1 | -1): TrafficVisual => {
-    const grp = new THREE.Group();
-    grp.position.set(cx + dir * -26, 0.52, laneZ);
-    grp.visible = false;
-
-    const carHull = new THREE.Mesh(
-      new THREE.BoxGeometry(3.8, 1.15, 1.72),
-      new THREE.MeshBasicMaterial({ color: '#080a0f', transparent: true, opacity: 0.85 })
-    );
-    carHull.position.y = 0.2;
-    grp.add(carHull);
-
-    const tailMat = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(3.2, 0.32, 0.2),
-      transparent: true,
-      opacity: 0.82,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
-    const headMat = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(3.0, 2.55, 1.85),
-      transparent: true,
-      opacity: 0.78,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
-
-    for (const tz of [-0.66, 0.66]) {
-      const tailBeam = new THREE.Mesh(new THREE.PlaneGeometry(9.5, 0.14), tailMat);
-      tailBeam.position.set(-dir * 3.8, 0.18, tz);
-      grp.add(tailBeam);
-
-      const headBeam = new THREE.Mesh(new THREE.PlaneGeometry(5.5, 0.2), headMat);
-      headBeam.position.set(dir * 3.1, 0.12, tz);
-      grp.add(headBeam);
-    }
-
-    scene.add(grp);
-    return { group: grp, direction: dir, speed: 24, laneZ, active: false };
+    const group = streetModels.createSedanMesh(dir === 1 ? '#1e242d' : '#1a2533');
+    group.rotation.y = dir === 1 ? 0 : Math.PI;
+    const spawnX = cx - dir * CROSSWALK_ROAD.spawnOffsetX;
+    const retireX = cx + dir * CROSSWALK_ROAD.retireOffsetX;
+    group.position.set(spawnX, 0, laneZ);
+    group.visible = false;
+    scene.add(group);
+    return { group, direction: dir, speed: 24, laneZ, spawnX, retireX, active: false };
   };
 
-  trafficStreaks.push(createTrafficStreak(-32.9, 1));
-  trafficStreaks.push(createTrafficStreak(-36.7, -1));
+  trafficStreaks.push(createTrafficStreak(CROSSWALK_ROAD.eastboundZ, 1));
+  trafficStreaks.push(createTrafficStreak(CROSSWALK_ROAD.westboundZ, -1));
 
   // =========================================================================
   // RESTRAINED MICRO-DUST SPARKLE POOL (Fixed Capacity — 80% Fewer, 65% Smaller!)
@@ -1911,35 +1990,32 @@ export function buildGameScene(
   debugWireframeGroup.visible = false;
   scene.add(debugWireframeGroup);
 
+  // Bounds are static. Door, platform and crossing transitions only toggle visibility.
+  const debugLines = new Map<string, THREE.LineSegments>();
+  for (const c of colliders) {
+    const boxGeo = new THREE.BoxGeometry(c.maxX - c.minX, c.height, c.maxZ - c.minZ);
+    const edges = new THREE.EdgesGeometry(boxGeo);
+    boxGeo.dispose();
+    const color = c.isObstacle
+      ? '#f97316'
+      : c.id === 'crosswalk_airwall'
+        ? '#eab308'
+        : '#38bdf8';
+    const line = new THREE.LineSegments(
+      edges,
+      new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.78 })
+    );
+    line.position.set((c.minX + c.maxX) / 2, c.height / 2, (c.minZ + c.maxZ) / 2);
+    line.visible = c.enabled;
+    debugLines.set(c.id, line);
+    debugWireframeGroup.add(line);
+  }
   const rebuildDebugWireframes = (cols: ColliderBox[]) => {
-    while (debugWireframeGroup.children.length > 0) {
-      const line = debugWireframeGroup.children[0] as THREE.LineSegments<
-        THREE.EdgesGeometry,
-        THREE.LineBasicMaterial
-      >;
-      debugWireframeGroup.remove(line);
-      line.geometry.dispose();
-      line.material.dispose();
-    }
     for (const c of cols) {
-      if (!c.enabled) continue;
-      const boxGeo = new THREE.BoxGeometry(c.maxX - c.minX, c.height, c.maxZ - c.minZ);
-      const edges = new THREE.EdgesGeometry(boxGeo);
-      boxGeo.dispose();
-      const color = c.isObstacle
-        ? '#f97316'
-        : c.id === 'crosswalk_airwall'
-          ? '#eab308'
-          : '#38bdf8';
-      const line = new THREE.LineSegments(
-        edges,
-        new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.78 })
-      );
-      line.position.set((c.minX + c.maxX) / 2, c.height / 2, (c.minZ + c.maxZ) / 2);
-      debugWireframeGroup.add(line);
+      const line = debugLines.get(c.id);
+      if (line) line.visible = c.enabled;
     }
   };
-  rebuildDebugWireframes(colliders);
 
   const setShadowsEnabled = (enabled: boolean, mapSize: number) => {
     sunsetDirLight.castShadow = enabled;
@@ -2002,8 +2078,15 @@ export function buildGameScene(
     );
 
     // Tabby cat idle breathing & tail sway
-    catGroup.scale.y = 1.0 + Math.sin(elapsed * 2.6) * 0.025;
-    catTail.rotation.y = Math.sin(elapsed * 3.1) * 0.16;
+    const dx = camera.position.x - catGroup.position.x;
+    const dz = camera.position.z - catGroup.position.z;
+    catGroup.rotation.y = Math.atan2(dx, dz);
+    const row = petRemaining > 0 ? 2 : dx * dx + dz * dz <= 12.25 ? 1 : 0;
+    petRemaining = Math.max(0, petRemaining - dt);
+    frameAge = row === catRow ? frameAge + dt : 0;
+    catRow = row;
+    const interval = row === 2 ? 0.55 : row === 1 ? 0.65 : 1.4;
+    atlas.offset.set((Math.floor(frameAge / interval) % 3) / 3, (2 - row) / 3);
 
     // Warm stall steamer puffs
     for (const puff of steamPuffs) {
@@ -2023,9 +2106,10 @@ export function buildGameScene(
     for (const tr of trafficStreaks) {
       if (!tr.active) continue;
       tr.group.position.x += tr.direction * tr.speed * dt;
-      if (Math.abs(tr.group.position.x - cx) > 30) {
+      if ((tr.group.position.x - tr.retireX) * tr.direction >= 0) {
         tr.active = false;
         tr.group.visible = false;
+        streetModels.cycleSedanPaint(tr.group);
       }
     }
 
@@ -2059,7 +2143,7 @@ export function buildGameScene(
     doorSliverMesh,
     doorShaftMesh,
     canePickupGroup,
-    catGroup,
+    catGroup, petCat, resetCat, busVehicle, setBusRoute,
     catPointLight,
     stallPointLight,
     barrierBeaconLight,

@@ -1,6 +1,6 @@
 import './style.css';
 import * as THREE from 'three';
-import { createInitialColliders, isOnTactilePath, WAYPOINTS } from './level/levelData';
+import { createInitialColliders, isOnTactilePath, groundFeature, streetZ, WAYPOINTS } from './level/levelData';
 import { buildGameScene } from './level/buildScene';
 import { EchoShaderManager } from './shaders/echoMaterial';
 import { FirstPersonController } from './player/controller';
@@ -8,14 +8,13 @@ import { GuideCaneSystem } from './player/cane';
 import { SpatialSoundEngine } from './audio/soundEngine';
 import { AccessibilityUI } from './ui/accessibilityUI';
 import { StoryScriptManager } from './story/scriptManager';
-import { generateEmpathySharePoster, PlaythroughStats } from './ui/shareCard';
 import { detectDefaultQuality, QUALITY_PROFILES, QualityName } from './render/quality';
 import { SkyEnvironmentSystem } from './render/skyEnvironment';
 import { PlanarReflectionPass } from './render/planarReflection';
 import { RainWeatherSystem } from './render/weather';
 import { CinemaPostPipeline } from './render/postPipeline';
 
-class BlindPathGameApp {
+class TactilePathGameApp {
   private renderer: THREE.WebGLRenderer;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
@@ -53,7 +52,15 @@ class BlindPathGameApp {
   private impactPulse = 0;
   private screenFade = 1.0;
 
-  private latestStats: PlaythroughStats | null = null;
+  private endingTimer = 0;
+  private endingPhase: 'off' | 'question' | 'leaving-question' | 'thanks' | 'roaming' = 'off';
+  private question = document.getElementById('ending-question')!;
+  private thanks = document.getElementById('ending-content')!;
+  private questionMotion?: Animation;
+  private chapterTimer = 0;
+  private chapterClosing = false;
+  private chapterScreen = document.getElementById('chapter-screen')!;
+  private record = document.getElementById('journey-record')!;
   private reflectionHideList: THREE.Object3D[] = [];
   private tmpWaveOrigin = new THREE.Vector3();
 
@@ -72,23 +79,16 @@ class BlindPathGameApp {
   private btnCaneTap = document.getElementById('btn-cane-tap') as HTMLButtonElement;
   private btnListen = document.getElementById('btn-listen') as HTMLButtonElement;
 
-  private autoLandscapeEnabled = true;
+  private portraitBlocked = false;
+  private pseudoLandscape = false;
+  private rotationTimer = 0;
+  private heldActions = new Map<HTMLElement, number>();
+  private rotationGuide = document.getElementById('rotation-guide')!;
   private stageW = window.innerWidth;
   private stageH = window.innerHeight;
 
-  // Ending & Share Card Elements
+  // Journey ending
   private endingModal = document.getElementById('ending-modal')!;
-  private endingSummaryView = document.getElementById('ending-summary-view')!;
-  private statTime = document.getElementById('stat-time')!;
-  private statTaps = document.getElementById('stat-taps')!;
-  private statBumps = document.getElementById('stat-bumps')!;
-  private statMemories = document.getElementById('stat-memories')!;
-  private posterWrap = document.getElementById('poster-preview-wrap')!;
-  private posterImg = document.getElementById('poster-img') as HTMLImageElement;
-  private btnDownloadPoster = document.getElementById('btn-download-poster') as HTMLAnchorElement;
-  private btnGeneratePoster = document.getElementById('btn-generate-poster')!;
-  private btnBackSummary = document.getElementById('btn-back-summary')!;
-  private btnPosterRoam = document.getElementById('btn-poster-roam')!;
   private btnAdmireSunset = document.getElementById('btn-admire-sunset')!;
   private btnRestart = document.getElementById('btn-restart')!;
   private btnReopenEnding = document.getElementById('btn-reopen-ending')!;
@@ -162,12 +162,9 @@ class BlindPathGameApp {
       onSensitivityChange: (s) => {
         this.controller.mouseSensitivity = s;
       },
-      onAutoLandscapeChange: (enabled) => {
-        this.autoLandscapeEnabled = enabled;
-        this.syncStageLayout();
-      },
       onDrawerToggle: (open) => {
         this.controller.modalOpen = open;
+        if (this.started) this.controller.enabled = !open;
         if (open) {
           this.controller.exitPointerLock();
         }
@@ -219,6 +216,7 @@ class BlindPathGameApp {
       this.a11yUI,
       {
         getPlayerPosition: () => this.controller.position,
+        isTouchMode: () => this.stageRoot.classList.contains('touch-layout'),
         onEquipCane: () => {
           this.caneSystem.setEquipped(true);
           this.btnCaneTap.disabled = false;
@@ -232,14 +230,10 @@ class BlindPathGameApp {
         onEscortAssistChange: (active) => {
           this.controller.escortAssistActive = active;
         },
-        onReachEnding: (elapsedSeconds, obstacleBumps, memoriesFound, memoriesTotal) => {
-          this.showEndingModal({
-            elapsedSeconds,
-            caneTaps: this.caneSystem.totalTaps,
-            obstacleBumps,
-            memoriesFound,
-            memoriesTotal,
-          });
+        onChapter: chapter => this.openChapter(chapter),
+        onReachEnding: (elapsedSeconds, obstacleBumps) => {
+          this.record.textContent = `耗时 ${elapsedSeconds} 秒　·　敲杖 ${this.caneSystem.totalTaps} 次　·　碰壁 ${obstacleBumps} 次`;
+          this.showEndingModal();
         },
       }
     );
@@ -255,7 +249,9 @@ class BlindPathGameApp {
         onFootstep: (pos) => {
           const isIndoor = pos.z > -5.5 && Math.abs(pos.x) < 2.2;
           const onTactile = !isIndoor && isOnTactilePath(pos.x, pos.z);
-          this.soundEngine.playFootstep(onTactile, isIndoor);
+          const feature = groundFeature(pos.x, pos.z);
+          if (feature) this.story.onGroundStep(feature, pos);
+          else this.soundEngine.playFootstep(onTactile, isIndoor);
         },
         onObstacleBump: (collider) => {
           this.story.onObstacleCollision(collider);
@@ -290,7 +286,7 @@ class BlindPathGameApp {
     this.precompileDynamicAssets();
 
     // Seed an opening golden sonic ripple on the wet tactile street corner for the Live 3D Title Screen!
-    this.tmpWaveOrigin.set(WAYPOINTS.crosswalkCenterX, 0.12, -23.6);
+    this.tmpWaveOrigin.set(WAYPOINTS.crosswalkCenterX, 0.12, WAYPOINTS.stallLightPos.z);
     this.echoManager.emitWave(this.tmpWaveOrigin, 'amber', 4.6, 1.3, 1.0);
 
     this.bootFill.style.width = '100%';
@@ -313,14 +309,41 @@ class BlindPathGameApp {
     const prevDebugVis = this.builtScene.debugWireframeGroup.visible;
     const prevTrafficVis = this.builtScene.trafficStreaks.map((t) => t.group.visible);
 
+    this.builtScene.busVehicle.visible = true;
     this.caneSystem.handRoot.visible = true;
     this.builtScene.pedestrianGroup.visible = true;
     this.builtScene.escortRig.playerLeftArmRoot.visible = true;
     this.builtScene.debugWireframeGroup.visible = true;
     for (const tr of this.builtScene.trafficStreaks) tr.group.visible = true;
 
-    this.renderer.compile(this.scene, this.camera);
+    // Gameplay draws to linear HDR targets. Compile and submit the first draw there
+    // during boot, including props outside the title camera and the sunset environment.
+    const previousTarget = this.renderer.getRenderTarget();
+    const culled: THREE.Object3D[] = [];
+    this.scene.traverseVisible(object => {
+      if (object.frustumCulled) {
+        culled.push(object);
+        object.frustumCulled = false;
+      }
+    });
+    try {
+      this.renderer.setRenderTarget(this.planarRefl.renderTarget);
+      this.renderer.compile(this.scene, this.camera);
+      this.builtScene.setBusRoute(7);
+      this.renderer.render(this.scene, this.camera);
+      this.builtScene.setBusRoute(12);
+      this.skyEnv.update(0, 1, false, this.camera.position, this.scene);
+      this.renderer.render(this.scene, this.camera);
+      // The mirrored pass uses a clipping plane and therefore a different GPU program.
+      this.renderer.setRenderTarget(previousTarget);
+      this.planarRefl.render(this.renderer, this.scene, this.camera, this.reflectionHideList);
+    } finally {
+      this.skyEnv.update(0, 0, false, this.camera.position, this.scene);
+      this.renderer.setRenderTarget(previousTarget);
+      for (const object of culled) object.frustumCulled = true;
+    }
 
+    this.builtScene.busVehicle.visible = false;
     this.caneSystem.handRoot.visible = prevHandVis;
     this.builtScene.pedestrianGroup.visible = prevPedVis;
     this.builtScene.escortRig.playerLeftArmRoot.visible = prevArmVis;
@@ -331,60 +354,66 @@ class BlindPathGameApp {
   }
 
   private isMobileOrTouch(): boolean {
-    const uaMobile = /Android|iPhone|iPad|iPod|MicroMessenger|Mobile/i.test(navigator.userAgent);
-    const coarse = window.matchMedia?.('(pointer: coarse)').matches;
-    const touchSmall = navigator.maxTouchPoints > 0 && Math.min(window.innerWidth, window.innerHeight) <= 900;
-    return uaMobile || coarse || touchSmall;
-  }
-
-  /**
-   * Mobile Auto-Landscape:
-   * 1. On Android/PWA browsers, attempts hardware Fullscreen + screen.orientation.lock('landscape').
-   * 2. On iOS Safari / WeChat WebView (where OS blocks lock API), seamlessly applies CSS 90deg
-   *    cinema landscape rotation (.force-landscape) and remaps WebGL aspect + touch coordinates!
-   */
-  private tryNativeLandscapeLock(): void {
-    if (!this.isMobileOrTouch() || !this.autoLandscapeEnabled) return;
-    try {
-      const el = document.documentElement as HTMLElement & {
-        webkitRequestFullscreen?: () => Promise<void>;
-      };
-      const fsPromise = el.requestFullscreen?.() || el.webkitRequestFullscreen?.();
-      const lockOrientation = () => {
-        const orient = screen.orientation as ScreenOrientation & {
-          lock?: (mode: string) => Promise<void>;
-        };
-        orient?.lock?.('landscape')?.catch(() => {});
-      };
-      if (fsPromise && typeof fsPromise.then === 'function') {
-        fsPromise.then(lockOrientation).catch(lockOrientation);
-      } else {
-        lockOrientation();
-      }
-    } catch {
-      // Fallback CSS auto-landscape handles portrait seamlessly
-    }
+    if (window.matchMedia('(pointer: coarse)').matches) return true;
+    if (navigator.maxTouchPoints === 0) return false;
+    // iPad desktop-mode Safari can report a fine pointer with a connected trackpad.
+    const mobilePlatform = /Android|iPad|iPhone|iPod/i.test(navigator.userAgent) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    return mobilePlatform || window.matchMedia('(hover: none)').matches;
   }
 
   private syncStageLayout(): void {
-    const winW = window.innerWidth;
-    const winH = window.innerHeight;
-    const isPortrait = winH > winW;
-    const shouldRotate = this.autoLandscapeEnabled && this.isMobileOrTouch() && isPortrait;
+    const touch = this.isMobileOrTouch();
+    const portrait = touch && window.innerWidth <= window.innerHeight;
+    if (portrait) {
+      if (!this.pseudoLandscape && !this.rotationTimer) {
+        this.rotationTimer = window.setTimeout(() => {
+          this.rotationTimer = 0;
+          this.pseudoLandscape = this.isMobileOrTouch() && window.innerWidth <= window.innerHeight;
+          this.syncStageLayout();
+        }, 3000);
+      }
+    } else {
+      window.clearTimeout(this.rotationTimer);
+      this.rotationTimer = 0;
+      this.pseudoLandscape = false;
+    }
 
-    this.stageRoot.classList.toggle('force-landscape', shouldRotate);
-    this.controller?.setCssRotatedLandscape(shouldRotate);
+    const blocked = portrait && !this.pseudoLandscape;
+    const modeChanged = this.stageRoot.classList.contains('touch-layout') !== touch ||
+      this.stageRoot.classList.contains('pseudo-landscape') !== this.pseudoLandscape ||
+      blocked !== this.portraitBlocked;
+    this.stageRoot.classList.toggle('touch-layout', touch);
+    this.stageRoot.classList.toggle('touch-landscape', touch && !blocked);
+    this.stageRoot.classList.toggle('pseudo-landscape', this.pseudoLandscape);
 
-    // Logical stage dimensions in landscape space
-    this.stageW = shouldRotate ? winH : winW;
-    this.stageH = shouldRotate ? winW : winH;
+    if (modeChanged) {
+      if (blocked) {
+        this.rotationGuide.classList.remove('leaving');
+        this.rotationGuide.hidden = false;
+      } else if (this.portraitBlocked && this.pseudoLandscape) {
+        this.rotationGuide.classList.add('leaving');
+      } else if (!this.pseudoLandscape) {
+        this.rotationGuide.hidden = true;
+        this.rotationGuide.classList.remove('leaving');
+      }
+      this.rotationGuide.setAttribute('aria-hidden', String(!blocked));
+      this.portraitBlocked = blocked;
+      this.stageRoot.inert = blocked;
+      this.controller.setTouchLayout(touch, this.pseudoLandscape);
+      this.clearTouchInput();
+    }
 
+    this.stageW = this.pseudoLandscape ? this.stageRoot.clientWidth : window.innerWidth;
+    this.stageH = this.pseudoLandscape ? this.stageRoot.clientHeight : window.innerHeight;
     const p = QUALITY_PROFILES[this.qualityName];
     this.camera.aspect = this.stageW / Math.max(1, this.stageH);
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(this.stageW, this.stageH, false);
     this.renderer.domElement.style.width = '100%';
     this.renderer.domElement.style.height = '100%';
+
+    if (this.endingPhase === 'question') this.fitEndingQuestion();
 
     const dpr = this.renderer.getPixelRatio();
     this.postPipeline.resize(this.stageW * dpr, this.stageH * dpr);
@@ -406,6 +435,8 @@ class BlindPathGameApp {
   private bindUIEvents(): void {
     // Synchronous Web Audio Unlock + Pointer Lock (Desktop) / Auto-Landscape (Mobile)!
     this.btnStart.addEventListener('click', () => {
+      if (this.started) return;
+      this.titleScreen.inert = true;
       this.soundEngine.unlockAndInit();
       this.started = true;
 
@@ -427,7 +458,6 @@ class BlindPathGameApp {
       this.hudRoot.setAttribute('aria-hidden', 'false');
 
       if (this.isMobileOrTouch()) {
-        this.tryNativeLandscapeLock();
         this.syncStageLayout();
       } else {
         // Capture mouse pointer immediately inside user click gesture!
@@ -438,44 +468,52 @@ class BlindPathGameApp {
       this.story.startJourney();
     });
 
-    // Cane Tap Button (supports both Quick Tap AND Hold-to-Charge Heavy Echo!)
-    this.btnCaneTap.addEventListener('pointerdown', (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      this.caneSystem.beginCharge();
-    });
-    const endCaneHold = (e: PointerEvent) => {
-      e.stopPropagation();
-      this.caneSystem.releaseCharge();
+    const bindHold = (button: HTMLButtonElement, start: () => void, finish: (cancelled: boolean) => void) => {
+      button.addEventListener('pointerdown', e => {
+        e.stopPropagation();
+        e.preventDefault();
+        if (!this.controller.enabled || this.controller.modalOpen || this.heldActions.has(button)) return;
+        this.heldActions.set(button, e.pointerId);
+        button.setPointerCapture(e.pointerId);
+        start();
+      });
+      const end = (e: PointerEvent) => {
+        e.stopPropagation();
+        if (this.heldActions.get(button) !== e.pointerId) return;
+        this.heldActions.delete(button);
+        finish(e.type !== 'pointerup');
+      };
+      button.addEventListener('pointerup', end);
+      button.addEventListener('pointercancel', end);
+      button.addEventListener('lostpointercapture', end);
     };
-    this.btnCaneTap.addEventListener('pointerup', endCaneHold);
-    this.btnCaneTap.addEventListener('pointercancel', endCaneHold);
-    this.btnCaneTap.addEventListener('pointerleave', () => {
-      if (this.caneSystem.chargeProgress > 0) this.caneSystem.releaseCharge();
+    bindHold(this.btnCaneTap, () => this.caneSystem.beginCharge(), cancelled => {
+      if (cancelled) this.caneSystem.cancelCharge();
+      else this.caneSystem.releaseCharge();
     });
-
-    // Focus Listen Hold Button (Mobile & Desktop)
-    this.btnListen.addEventListener('pointerdown', (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      this.controller.setTouchListening(true);
-      this.btnListen.classList.add('active');
-    });
-    const endListen = (e: PointerEvent) => {
-      e.stopPropagation();
-      this.controller.setTouchListening(false);
-      this.btnListen.classList.remove('active');
-    };
-    this.btnListen.addEventListener('pointerup', endListen);
-    this.btnListen.addEventListener('pointercancel', endListen);
-    this.btnListen.addEventListener('pointerleave', endListen);
+    bindHold(this.btnListen, () => this.controller.setTouchListening(true),
+      () => this.controller.setTouchListening(false));
+    window.addEventListener('blur', () => this.clearTouchInput());
 
     this.btnPeek.addEventListener('click', () => this.togglePeekMode());
     this.btnMute.addEventListener('click', () => this.toggleMute());
 
     // Global Keyboard Shortcuts
     window.addEventListener('keydown', (e) => {
-      if (!this.started) return;
+      if (this.portraitBlocked) return;
+      if (this.endingPhase === 'question' && e.code === 'Space') {
+        e.preventDefault();
+        this.fadeQuestion();
+        return;
+      }
+      if (this.story.chapterOpen) {
+        if (e.code === 'Space') {
+          e.preventDefault();
+          if (!e.repeat) this.closeChapter();
+        }
+        return;
+      }
+      if (!this.started || this.controller.modalOpen) return;
       if (e.code === 'Space') {
         e.preventDefault();
         if (!e.repeat) this.caneSystem.beginCharge();
@@ -489,55 +527,52 @@ class BlindPathGameApp {
     });
 
     window.addEventListener('keyup', (e) => {
-      if (!this.started) return;
+      if (!this.started || this.controller.modalOpen) return;
       if (e.code === 'Space') {
         e.preventDefault();
         this.caneSystem.releaseCharge();
       }
     });
 
-    // Ending Overlay & Independent Centered 9:16 Poster Lightbox (Round 5)
-    this.btnGeneratePoster.addEventListener('click', () => {
-      if (!this.latestStats) return;
-      const dataUrl = generateEmpathySharePoster(this.latestStats);
-      this.posterImg.src = dataUrl;
-      this.btnDownloadPoster.href = dataUrl;
-      this.endingSummaryView.classList.add('hidden');
-      this.posterWrap.classList.remove('hidden');
-      this.a11yUI.speak('公益共情海报已生成，电脑端可点击下载高清海报，手机端可长按图片保存');
+    this.chapterScreen.addEventListener('click', () => this.closeChapter());
+
+    this.endingModal.addEventListener('click', () => this.fadeQuestion());
+    this.btnAdmireSunset.addEventListener('click', () => {
+      if (this.endingPhase !== 'thanks') return;
+      this.endingPhase = 'roaming';
+      this.story.showSunsetBus();
+      this.endingModal.inert = true;
+      this.endingModal.classList.add('roaming');
+      this.endingTimer = window.setTimeout(() => {
+        this.endingModal.classList.add('hidden');
+        this.endingModal.classList.remove('roaming');
+        this.endingModal.inert = false;
+        this.endingPhase = 'off';
+        this.hudRoot.inert = false;
+        this.btnReopenEnding.classList.remove('hidden');
+        this.controller.modalOpen = false;
+        this.controller.enabled = true;
+        if (!this.isMobileOrTouch()) this.controller.requestPointerLock();
+      }, 650);
     });
-
-    this.btnBackSummary.addEventListener('click', () => {
-      this.posterWrap.classList.add('hidden');
-      this.endingSummaryView.classList.remove('hidden');
-    });
-
-    const enterSunsetRoam = () => {
-      this.endingModal.classList.add('hidden');
-      this.btnReopenEnding.classList.remove('hidden');
-      this.controller.modalOpen = false;
-      this.controller.enabled = true;
-      if (!this.isMobileOrTouch()) {
-        this.controller.requestPointerLock();
-      }
-    };
-
-    this.btnAdmireSunset.addEventListener('click', enterSunsetRoam);
-    this.btnPosterRoam.addEventListener('click', enterSunsetRoam);
-
-    this.btnReopenEnding.addEventListener('click', () => {
-      this.btnReopenEnding.classList.add('hidden');
-      this.posterWrap.classList.add('hidden');
-      this.endingSummaryView.classList.remove('hidden');
-      this.endingModal.classList.remove('hidden');
-      this.controller.modalOpen = true;
-      this.controller.exitPointerLock();
-    });
-
+    this.btnReopenEnding.addEventListener('click', () => this.showEndingModal(true));
     this.btnRestart.addEventListener('click', () => this.restartExperience());
 
+    this.rotationGuide.addEventListener('transitionend', () => {
+      if (this.rotationGuide.classList.contains('leaving') && !this.portraitBlocked) {
+        this.rotationGuide.hidden = true;
+      }
+    });
     const handleResize = () => this.syncStageLayout();
+    for (const type of ['contextmenu', 'selectstart']) {
+      this.stageRoot.addEventListener(type, e => {
+        if (this.stageRoot.classList.contains('touch-layout')) e.preventDefault();
+      });
+    }
     window.addEventListener('resize', handleResize);
+    for (const query of ['(pointer: coarse)', '(hover: none)']) {
+      window.matchMedia(query).addEventListener?.('change', handleResize);
+    }
     window.addEventListener('orientationchange', () => {
       window.setTimeout(handleResize, 120);
     });
@@ -560,29 +595,105 @@ class BlindPathGameApp {
     this.a11yUI.speak(muted ? '已静音' : '声音已开启');
   }
 
-  private showEndingModal(stats: PlaythroughStats): void {
-    this.latestStats = stats;
-    this.statTime.textContent = `${stats.elapsedSeconds}s`;
-    this.statTaps.textContent = `${stats.caneTaps}`;
-    this.statBumps.textContent = `${stats.obstacleBumps}`;
-    this.statMemories.textContent = `${stats.memoriesFound}/${stats.memoriesTotal}`;
+  private clearTouchInput(): void {
+    this.heldActions.clear();
+    this.caneSystem.cancelCharge();
+    this.controller.clearInput();
+  }
 
-    this.posterWrap.classList.add('hidden');
-    this.endingSummaryView.classList.remove('hidden');
-    this.endingModal.classList.remove('hidden');
+  private pauseControls(): void {
     this.controller.modalOpen = true;
+    this.controller.enabled = false;
+    this.clearTouchInput();
     this.controller.exitPointerLock();
+    this.hudRoot.inert = true;
+  }
 
-    this.a11yUI.speak(
-      `体验完成。本次耗时 ${stats.elapsedSeconds} 秒，盲杖探路 ${stats.caneTaps} 次，遭遇碰壁 ${stats.obstacleBumps} 次，收集城市微光 ${stats.memoriesFound} 处。`
-    );
+  private openChapter(chapter: number): void {
+    const messages = [
+      `眼睛关上之后，世界并没有消失。
+它换了一种方式，落在杖尖的每一次回响里。`,
+      `盲道突然断了，像一条被随意折断的线。
+手里的盲杖左右试探，原来最难绕开的，从来不是路。`,
+      `车声从四面涌来，绿灯却没有声音。
+在无数次擦肩而过里，我们等的，只是一句“我带你过去”。`,
+    ];
+    this.pauseControls();
+    document.getElementById('chapter-text')!.textContent = messages[chapter - 1];
+    this.chapterScreen.hidden = false;
+    this.chapterScreen.focus();
+    this.a11yUI.speak(messages[chapter - 1]);
+    this.chapterTimer = window.setTimeout(() => this.closeChapter(), 4500);
+  }
+
+  private closeChapter(): void {
+    if (!this.story.chapterOpen || this.chapterClosing) return;
+    this.chapterClosing = true;
+    window.speechSynthesis?.cancel();
+    window.clearTimeout(this.chapterTimer);
+    this.story.finishChapter();
+    if (this.story.hasRiddenBus) this.controller.yaw = 0;
+    this.chapterScreen.classList.add('leaving');
+    this.chapterTimer = window.setTimeout(() => {
+      this.chapterScreen.hidden = true;
+      this.chapterScreen.classList.remove('leaving');
+      this.chapterClosing = false;
+      this.hudRoot.inert = false;
+      this.controller.clearInput();
+      this.controller.modalOpen = false;
+      this.controller.enabled = true;
+    }, 350);
+  }
+
+  private fitEndingQuestion(): void {
+    this.question.style.scale = String(Math.min(1, (this.stageW - 32) / Math.max(1, this.question.scrollWidth)));
+  }
+
+  private fadeQuestion(): void {
+    if (this.endingPhase !== 'question') return;
+    this.endingPhase = 'leaving-question';
+    window.clearTimeout(this.endingTimer);
+    const opacity = getComputedStyle(this.question).opacity;
+    this.questionMotion?.cancel();
+    this.questionMotion = this.question.animate([{ opacity }, { opacity: 0 }],
+      { duration: 800, easing: 'ease-in-out', fill: 'both' });
+    this.endingTimer = window.setTimeout(() => this.showThanks(), 1000);
+  }
+
+  private showThanks(): void {
+    this.questionMotion?.cancel();
+    this.question.hidden = true;
+    this.thanks.hidden = false;
+    this.endingPhase = 'thanks';
+    this.endingModal.focus();
+  }
+
+  private showEndingModal(reopen = false): void {
+    window.clearTimeout(this.endingTimer);
+    this.pauseControls();
+    this.btnReopenEnding.classList.add('hidden');
+    this.endingModal.classList.remove('hidden');
+    if (reopen) { this.showThanks(); return; }
+    this.endingPhase = 'question';
+    this.thanks.hidden = true;
+    this.question.hidden = false;
+    this.endingModal.focus();
+    // Keep the full sentence on one line in a narrow, unrotated viewport.
+    this.fitEndingQuestion();
+    this.questionMotion = this.question.animate([{ opacity: 0 }, { opacity: 1 }],
+      { delay: 900, duration: 1000, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'both' });
+    this.endingTimer = window.setTimeout(() => this.fadeQuestion(), 5800);
   }
 
   private restartExperience(): void {
+    window.clearTimeout(this.endingTimer);
+    this.questionMotion?.cancel();
+    this.endingPhase = 'off';
     this.endingModal.classList.add('hidden');
     this.btnReopenEnding.classList.add('hidden');
-    this.latestStats = null;
-    this.statBumps.textContent = '0';
+    this.record.textContent = '';
+    this.hudRoot.inert = false;
+    window.speechSynthesis?.cancel();
 
     this.btnCaneTap.disabled = true;
     this.echoManager.reset();
@@ -615,7 +726,7 @@ class BlindPathGameApp {
       this.attractWaveTimer -= dt;
       if (this.attractWaveTimer <= 0) {
         this.attractWaveTimer = 2.9;
-        const z = -21.5 - Math.random() * 5.5;
+        const z = streetZ(-21.5) - Math.random() * 5.5;
         const warm = Math.random() > 0.35;
         this.tmpWaveOrigin.set(WAYPOINTS.crosswalkCenterX, 0.12, z);
         this.echoManager.emitWave(this.tmpWaveOrigin, warm ? 'amber' : 'cyan', 4.5, 1.2, 0.95);
@@ -648,6 +759,7 @@ class BlindPathGameApp {
     requestAnimationFrame(this.animate);
 
     const dt = Math.min(0.05, this.clock.getDelta());
+    if (this.portraitBlocked) return;
     this.totalElapsed += dt;
 
     this.controller.update(dt);
@@ -664,7 +776,7 @@ class BlindPathGameApp {
     this.echoManager.update(dt, this.totalElapsed);
     this.a11yUI.setChargeProgress(this.caneSystem.chargeProgress);
 
-    this.story.update(
+    if (!this.controller.modalOpen && !this.chapterClosing) this.story.update(
       dt,
       this.totalElapsed,
       this.controller.position,
@@ -739,4 +851,4 @@ class BlindPathGameApp {
   };
 }
 
-new BlindPathGameApp();
+new TactilePathGameApp();

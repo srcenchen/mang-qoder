@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { ColliderBox, PLAYER_EYE_HEIGHT, PLAYER_RADIUS, WAYPOINTS } from '../level/levelData';
+import { groundFeature, ColliderBox, PLAYER_EYE_HEIGHT, PLAYER_RADIUS, streetZ, WAYPOINTS } from '../level/levelData';
 
 export interface ControllerCallbacks {
   onFootstep: (pos: THREE.Vector3) => void;
@@ -27,8 +27,6 @@ export class FirstPersonController {
 
   /** True when Web Pointer Lock API has captured the desktop cursor */
   public isPointerLocked = false;
-  /** True when CSS 90deg clockwise auto-landscape is active on a portrait mobile screen */
-  public cssRotatedLandscape = false;
   /** Set true while settings drawer or ending modal is open so canvas doesn't recapture cursor */
   public modalOpen = false;
 
@@ -46,6 +44,8 @@ export class FirstPersonController {
   private colliders: ColliderBox[];
   private callbacks: ControllerCallbacks;
 
+  private touchLayout = false;
+  private pseudoLandscape = false;
   private lookPointerId: number | null = null;
   private lookStartX = 0;
   private lookStartY = 0;
@@ -98,10 +98,6 @@ export class FirstPersonController {
     this.touchListening = active;
   }
 
-  public setCssRotatedLandscape(rotated: boolean): void {
-    this.cssRotatedLandscape = rotated;
-  }
-
   public requestPointerLock(): void {
     if (this.modalOpen || !this.enabled || this.isPointerLocked) return;
     const isCoarse = window.matchMedia?.('(pointer: coarse)').matches;
@@ -124,13 +120,11 @@ export class FirstPersonController {
     }
   }
 
-  public reset(): void {
-    this.position.set(WAYPOINTS.playerStart.x, PLAYER_EYE_HEIGHT, WAYPOINTS.playerStart.z);
-    this.yaw = 0;
-    this.pitch = -0.09;
+  public clearInput(): void {
     this.sweepInput = 0;
     this.lookPointerId = null;
     this.joyPointerId = null;
+
     this.joyVec.set(0, 0);
     this.joystickKnob.style.transform = 'translate(0px, 0px)';
     this.velocity.set(0, 0);
@@ -140,6 +134,13 @@ export class FirstPersonController {
     this.touchListening = false;
     this.isListening = false;
     this.listenBlend = 0;
+  }
+
+  public reset(): void {
+    this.position.set(WAYPOINTS.playerStart.x, PLAYER_EYE_HEIGHT, WAYPOINTS.playerStart.z);
+    this.yaw = 0;
+    this.pitch = -0.09;
+    this.clearInput();
     this.stepDistAccum = 0;
     this.shakeTimer = 0;
     this.lastObstacleBumpTimes.clear();
@@ -154,12 +155,9 @@ export class FirstPersonController {
     this.shakeTimer = duration;
   }
 
-  /** Maps physical viewport deltas into rotated stage space when CSS 90deg auto-landscape is active */
-  private mapScreenDelta(dx: number, dy: number): { x: number; y: number } {
-    if (this.cssRotatedLandscape) {
-      return { x: dy, y: -dx };
-    }
-    return { x: dx, y: dy };
+  public setTouchLayout(touchLayout: boolean, pseudoLandscape: boolean): void {
+    this.touchLayout = touchLayout;
+    this.pseudoLandscape = pseudoLandscape;
   }
 
   private bindEvents(): void {
@@ -208,8 +206,8 @@ export class FirstPersonController {
 
     this.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
-    // Bottom-Left Virtual Joystick (Isolated pointerId + auto-landscape coordinate transform!)
-    const maxJoyRadius = 36;
+    // Landscape movement stick: one captured pointer owns its drag.
+    let maxJoyRadius = 35;
     this.joystickZone.addEventListener('pointerdown', (e: PointerEvent) => {
       e.stopPropagation();
       e.preventDefault();
@@ -217,6 +215,7 @@ export class FirstPersonController {
       this.joyPointerId = e.pointerId;
       this.joystickZone.setPointerCapture(e.pointerId);
       const rect = this.joystickZone.getBoundingClientRect();
+      maxJoyRadius = Math.max(35, Math.round(Math.min(rect.width, rect.height) * 0.4));
       this.joyOriginX = rect.left + rect.width / 2;
       this.joyOriginY = rect.top + rect.height / 2;
       this.updateJoystickFromPointer(e.clientX, e.clientY, maxJoyRadius);
@@ -233,6 +232,7 @@ export class FirstPersonController {
       if (e.pointerId !== this.joyPointerId) return;
       e.stopPropagation();
       this.joyPointerId = null;
+
       this.joyVec.set(0, 0);
       this.joystickKnob.style.transform = 'translate(0px, 0px)';
     };
@@ -263,6 +263,14 @@ export class FirstPersonController {
       }
 
       if (this.lookPointerId !== null) return;
+      if (e.pointerType === 'touch' && this.touchLayout) {
+        const bounds = this.domElement.getBoundingClientRect();
+        const rightHalf = this.pseudoLandscape ?
+          e.clientY >= bounds.top + bounds.height / 2 : e.clientX >= bounds.left + bounds.width / 2;
+        if (!rightHalf) return;
+        e.stopPropagation();
+        this.domElement.setPointerCapture(e.pointerId);
+      }
       this.lookPointerId = e.pointerId;
       this.lookStartX = e.clientX;
       this.lookStartY = e.clientY;
@@ -284,15 +292,18 @@ export class FirstPersonController {
       if (e.pointerId === this.lookPointerId) {
         const rawDx = e.clientX - this.lastLookX;
         const rawDy = e.clientY - this.lastLookY;
+        const rotated = e.pointerType === 'touch' && this.pseudoLandscape;
+        const dx = rotated ? rawDy : rawDx;
+        const dy = rotated ? -rawDx : rawDy;
+        if (e.pointerType === 'touch') e.stopPropagation();
         this.lastLookX = e.clientX;
         this.lastLookY = e.clientY;
         this.lookMovedDist += Math.hypot(rawDx, rawDy);
 
-        const mapped = this.mapScreenDelta(rawDx, rawDy);
         const sensitivity = (e.pointerType === 'touch' ? 0.0048 : 0.0034) * this.mouseSensitivity;
-        this.yaw -= mapped.x * sensitivity;
-        this.pitch = Math.max(-0.65, Math.min(0.52, this.pitch - mapped.y * sensitivity * 0.78));
-        this.sweepInput = Math.max(-1, Math.min(1, this.sweepInput + mapped.x * 0.012));
+        this.yaw -= dx * sensitivity;
+        this.pitch = Math.max(-0.65, Math.min(0.52, this.pitch - dy * sensitivity * 0.78));
+        this.sweepInput = Math.max(-1, Math.min(1, this.sweepInput + dx * 0.012));
       }
     });
 
@@ -308,22 +319,22 @@ export class FirstPersonController {
       if (e.pointerId !== this.lookPointerId) return;
       const dist = Math.hypot(e.clientX - this.lookStartX, e.clientY - this.lookStartY);
       this.lookPointerId = null;
-      if (e.type === 'pointerup' && dist < 10 && this.lookMovedDist < 14 && this.enabled) {
+      if (!(e.pointerType === 'touch' && this.touchLayout) && e.type === 'pointerup' && dist < 10 && this.lookMovedDist < 14 && this.enabled) {
         this.callbacks.onPrimaryHoldStart();
         this.callbacks.onPrimaryHoldEnd();
       }
     };
     window.addEventListener('pointerup', releaseLook);
     window.addEventListener('pointercancel', releaseLook);
+    this.domElement.addEventListener('lostpointercapture', releaseLook);
   }
 
   private updateJoystickFromPointer(clientX: number, clientY: number, maxR: number): void {
     const rawDx = clientX - this.joyOriginX;
     const rawDy = clientY - this.joyOriginY;
-    const mapped = this.mapScreenDelta(rawDx, rawDy);
-    const dist = Math.hypot(mapped.x, mapped.y);
+    const dist = Math.hypot(rawDx, rawDy);
     const clamped = Math.min(dist, maxR);
-    const angle = Math.atan2(mapped.y, mapped.x);
+    const angle = this.pseudoLandscape ? Math.atan2(-rawDx, rawDy) : Math.atan2(rawDy, rawDx);
     const kx = Math.cos(angle) * clamped;
     const ky = Math.sin(angle) * clamped;
     this.joystickKnob.style.transform = `translate(${kx.toFixed(1)}px, ${ky.toFixed(1)}px)`;
@@ -341,7 +352,7 @@ export class FirstPersonController {
         1.48 + swayY,
         -18.0 + Math.sin(this.clockSec * 0.16) * 0.75
       );
-      this.camera.lookAt(WAYPOINTS.crosswalkCenterX - 0.5, 0.92, -31.5);
+      this.camera.lookAt(WAYPOINTS.crosswalkCenterX - 0.5, 0.92, streetZ(-31.5));
       this.camera.fov = 56;
       this.camera.updateProjectionMatrix();
       return;
@@ -399,7 +410,8 @@ export class FirstPersonController {
       moveRight /= inputLen;
     }
 
-    const walkSpeed = this.isListening ? 0.58 : 0.92;
+    const wet = groundFeature(this.position.x, this.position.z) === 'puddle';
+    const walkSpeed = (this.isListening ? 0.58 : 0.92) * (wet ? 0.75 : 1);
     const prevX = this.position.x;
     const prevZ = this.position.z;
 

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { WAYPOINTS } from '../level/levelData';
+import { STREET, streetX, streetZ, WAYPOINTS } from '../level/levelData';
 
 /** Max 2 concurrent sonic echo waves on screen (reusing oldest slot -> clean, restrained visual!) */
 export const ECHO_WAVE_COUNT = 2;
@@ -48,11 +48,16 @@ export interface EchoUniformState {
 export interface EnhanceMaterialOptions {
   selfGlowBoost?: number;
   isWetGround?: boolean;
+  sparseWetPatches?: boolean;
+  puddleFeedback?: boolean;
 }
 
 export class EchoShaderManager {
   public readonly uniforms: EchoUniformState;
   private waves: ActiveEchoWave[] = [];
+  private puddleNight = { value: 0 };
+  private puddleContacts = { value: Array.from({ length: 4 }, () => new THREE.Vector3(0, 0, -100)) };
+  private nextPuddleContact = 0;
   private nextWaveSlot = 0;
   private nextMemorySlot = 0;
   private echoDuration = 2.4;
@@ -207,7 +212,15 @@ export class EchoShaderManager {
     this.recordMemoryAnchor(origin, clampedRadius);
   }
 
+  public emitPuddleRipple(x: number, z: number): void {
+    const contacts = this.puddleContacts.value;
+    contacts[this.nextPuddleContact].set(x, z, this.uniforms.uTime.value);
+    this.nextPuddleContact = (this.nextPuddleContact + 1) % contacts.length;
+  }
+
   public reset(): void {
+    this.nextPuddleContact = this.puddleNight.value = 0;
+    for (const contact of this.puddleContacts.value) contact.z = -100;
     for (let i = 0; i < ECHO_WAVE_COUNT; i++) {
       this.waves[i].active = false;
       this.uniforms.uWaves.value[i].set(0, -100, 0, 0);
@@ -225,6 +238,10 @@ export class EchoShaderManager {
 
   public update(dt: number, elapsed: number): void {
     this.uniforms.uTime.value = elapsed;
+    const shouldFade = this.uniforms.uDebugPeek.value > 0.5 || this.uniforms.uAttractReveal.value > 0.2;
+    const nightTarget = shouldFade ? 0 : 1 - THREE.MathUtils.smoothstep(this.uniforms.uSunsetFactor.value, 0.08, 0.65);
+    const night = THREE.MathUtils.damp(this.puddleNight.value, nightTarget, 8, dt);
+    this.puddleNight.value = Math.abs(night - nightTarget) < 0.002 ? nightTarget : night;
     this.uniforms.uBarrierBeaconPulse.value =
       0.25 + 0.75 * Math.pow(Math.sin(elapsed * 3.6) * 0.5 + 0.5, 2.2);
 
@@ -261,6 +278,12 @@ export class EchoShaderManager {
     const shared = this.uniforms;
     const selfBoost = options?.selfGlowBoost ?? 0.0;
     const isWetGround = options?.isWetGround ?? false;
+    const sparseWetPatches = options?.sparseWetPatches ?? false;
+    const patchScale = sparseWetPatches ? Math.SQRT1_2 : 1;
+    const mainRippleCell = sparseWetPatches ? '0.95' : '0.85';
+    const fineRippleCell = sparseWetPatches ? '0.85' : '0.52';
+    const fineRippleThreshold = sparseWetPatches ? '0.60' : '0.45';
+    const rippleDistortion = sparseWetPatches ? '0.013' : '0.022';
 
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.uTime = shared.uTime;
@@ -324,14 +347,14 @@ export class EchoShaderManager {
               f.y
             );
           }
-          vec2 wRipple(vec2 p, float t, float cell, float seed) {
+          vec2 wRipple(vec2 p, float t, float cell, float seed, float activationThreshold) {
             vec2 q = p / cell;
             vec2 id = floor(q);
             vec2 f = fract(q);
             vec3 h = wHash3(id + seed);
             float period = 0.65 + 0.55 * h.x;
             float life = fract(t / period + h.z);
-            float on = step(0.45, h.y);
+            float on = step(activationThreshold, h.y);
             vec2 ctr = 0.22 + 0.56 * h.xy;
             vec2 dv = f - ctr;
             float d = length(dv);
@@ -352,17 +375,20 @@ export class EchoShaderManager {
           vec2 wetRippleSlope = vec2(0.0);
           if (vEchoWorldPos.z < -5.6) {
             vec2 gp = vEchoWorldPos.xz;
-            float p1 = wNoise(gp * 0.28 + vec2(1.7, 4.3));
-            float p2 = wNoise(gp * 0.72 - vec2(3.1, 2.5));
+            float p1 = wNoise(gp * ${(0.28 * patchScale).toFixed(6)} + vec2(1.7, 4.3));
+            float p2 = wNoise(gp * ${(0.72 * patchScale).toFixed(6)} - vec2(3.1, 2.5));
             float puddleField = p1 * 0.65 + p2 * 0.35;
             // Extra rain puddle richness near crosswalk roadway (Z < -29.0)
-            float roadBonus = smoothstep(-28.5, -31.5, vEchoWorldPos.z) * 0.14;
+            float roadBonus = (1.0 - smoothstep(${streetZ(-43.5).toFixed(2)}, ${(streetZ(-43.5) + 3).toFixed(2)}, vEchoWorldPos.z)) * 0.14;
             wetMaskPuddle = smoothstep(0.50 - roadBonus, 0.66 - roadBonus, puddleField);
-            // Shelter under breakfast stall awning on Leg 3 (X in [9.6, 12.1], Z in [-25.5, -21.7])
-            float underAwning = step(9.6, gp.x) * step(gp.x, 12.1) * step(-25.5, gp.y) * step(gp.y, -21.7);
+            // Shelter under breakfast stall awning on Leg 3 (X in [${streetX(9.6).toFixed(2)}, ${streetX(12.1).toFixed(2)}], Z in [${streetZ(-25.5).toFixed(2)}, ${streetZ(-21.7).toFixed(2)}])
+            float underAwning = step(${streetX(9.6).toFixed(2)}, gp.x) * step(gp.x, ${streetX(12.1).toFixed(2)}) * step(${streetZ(-25.5).toFixed(2)}, gp.y) * step(gp.y, ${streetZ(-21.7).toFixed(2)});
             wetMaskPuddle *= (1.0 - underAwning * 0.85);
             roughnessFactor = mix(roughnessFactor * 0.76, 0.055, wetMaskPuddle);
-            wetRippleSlope = (wRipple(gp, uTime, 0.85, 1.3) + wRipple(gp + 0.41, uTime * 1.13, 0.52, 7.9) * 0.65) * wetMaskPuddle;
+            wetRippleSlope = (
+              wRipple(gp, uTime, ${mainRippleCell}, 1.3, 0.45) +
+              wRipple(gp + 0.41, uTime * 1.13, ${fineRippleCell}, 7.9, ${fineRippleThreshold}) * 0.65
+            ) * wetMaskPuddle;
           }
         `
         : '';
@@ -374,7 +400,7 @@ export class EchoShaderManager {
             float fresnel = 0.06 + 0.94 * pow(1.0 - clamp(viewDirW.y, 0.0, 1.0), 4.2);
             vec4 rc = uReflMatrix * vec4(vEchoWorldPos.x, 0.08, vEchoWorldPos.z, 1.0);
             vec2 ruv = rc.xy / max(rc.w, 1e-4);
-            ruv += wetRippleSlope * 0.022;
+            ruv += wetRippleSlope * ${rippleDistortion};
             vec2 rClamped = clamp(ruv, vec2(0.004), vec2(0.996));
             vec2 blurOff = vec2(0.0, mix(0.018, 0.004, wetMaskPuddle));
             vec3 reflCol = texture2D(uRefl, rClamped).rgb * 0.5
@@ -386,6 +412,69 @@ export class EchoShaderManager {
           }
         `
         : '';
+
+      if (options?.puddleFeedback) {
+        shader.uniforms.uPuddleNight = this.puddleNight;
+        shader.uniforms.uPuddleContacts = this.puddleContacts;
+      }
+      const puddleHelpers = options?.puddleFeedback ? `
+        uniform float uPuddleNight;
+        uniform vec3 uPuddleContacts[4];
+
+        float puddleRing(vec2 fromDrop, float progress, float radius) {
+          float distanceToRing = abs(length(fromDrop) - mix(0.018, radius, progress));
+          return (1.0 - smoothstep(0.004, 0.018, distanceToRing))
+            * smoothstep(0.0, 0.08, progress) * (1.0 - progress);
+        }
+      ` : '';
+      const puddleLighting = options?.puddleFeedback ? `
+        if (uPuddleNight > 0.001) {
+          vec2 surfacePoint = vEchoWorldPos.xz;
+          vec2 local = surfacePoint - vec2(${STREET.puddle.x.toFixed(3)}, ${STREET.puddle.z.toFixed(3)});
+          vec2 outline = local / vec2(${STREET.puddle.rx.toFixed(3)}, ${STREET.puddle.rz.toFixed(3)});
+          float angle = atan(outline.y + 0.00001, outline.x);
+          // Match the outline used by the puddle mesh and hit detection.
+          float edgeRadius = 1.0 + 0.08 * cos(3.0 * angle)
+            + 0.065 * sin(5.0 * angle) + 0.035 * sin(8.0 * angle);
+          float innerEdge = edgeRadius - length(outline);
+          float rim = (1.0 - smoothstep(0.018, 0.061, abs(innerEdge - 0.026)))
+            * smoothstep(-0.003, 0.024, innerEdge);
+
+          float nearPuddle = 1.0 - smoothstep(1.15, 4.0, distance(cameraPosition.xz, surfacePoint));
+          float tipLight = uCaneActive * (1.0 - smoothstep(0.12, 1.18, distance(uCaneTip, vEchoWorldPos)));
+          float sonar = 0.0;
+          for (int i = 0; i < ${ECHO_WAVE_COUNT}; i++) {
+            if (uWaves[i].w > 0.01) {
+              float offset = abs(length(surfacePoint - uWaves[i].xz) - uWaves[i].w);
+              sonar = max(sonar, exp(-offset * 17.0) * uWaveAlpha[i]);
+            }
+          }
+          float reveal = clamp(max(nearPuddle * 0.64, max(tipLight, sonar)), 0.0, 1.0);
+          float clock = uTime * 0.72;
+          float rain =
+            puddleRing(local - vec2(-0.24, -0.39), fract(clock), 0.20) +
+            puddleRing(local - vec2(0.16, 0.39), fract(clock + 0.25), 0.22) +
+            puddleRing(local - vec2(0.30, -0.23), fract(clock + 0.50), 0.19) +
+            puddleRing(local - vec2(-0.09, 0.03), fract(clock + 0.75), 0.24);
+          float impacts = 0.0;
+          for (int i = 0; i < 4; i++) {
+            float age = uTime - uPuddleContacts[i].z;
+            if (age >= 0.0 && age < 1.12) {
+              impacts = max(impacts, puddleRing(surfacePoint - uPuddleContacts[i].xy, age / 1.12, 0.56));
+            }
+          }
+          float edgeFade = smoothstep(0.005, 0.13, innerEdge);
+          float ringLight = (rain * (0.027 + 0.12 * reveal) + impacts * 0.48) * edgeFade;
+          float rimLight = rim * (0.014 + 0.14 * reveal);
+          float grazing = pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 2.0);
+          vec3 wetTint = vec3(0.46, 0.74, 0.87);
+          outgoingLight += uPuddleNight * (
+            wetTint * (ringLight + rimLight + grazing * max(tipLight, sonar) * edgeFade * 0.15)
+            + reflectedLight.directSpecular * (tipLight + sonar) * 0.7
+          );
+          diffuseColor.a = max(diffuseColor.a, uPuddleNight * (rimLight * 1.6 + ringLight * 0.7));
+        }
+      ` : '';
 
       shader.fragmentShader = shader.fragmentShader
         .replace(
@@ -414,7 +503,8 @@ export class EchoShaderManager {
           uniform mat4 uReflMatrix;
           uniform float uReflOn;
           uniform float uSelfGlowBoost;
-          ${wetHelpers}`
+          ${wetHelpers}
+          ${puddleHelpers}`
         )
         .replace(
           '#include <roughnessmap_fragment>',
@@ -520,12 +610,13 @@ export class EchoShaderManager {
             // 9. Smooth Sunset Finale Reveal
             outgoingLight = mix(immersiveLight, outgoingLight * 1.15, uSunsetFactor);
           }
+          ${puddleLighting}
           #include <opaque_fragment>`
         );
     };
 
     mat.customProgramCacheKey = () =>
-      `echo-aaa-v3-${selfBoost.toFixed(2)}-${isWetGround ? 'wet' : 'std'}`;
+      `echo-aaa-v3-${selfBoost.toFixed(2)}-${isWetGround ? 'wet' : 'std'}-${patchScale}-${options?.puddleFeedback ? 'puddle' : 'standard'}`;
     return mat;
   }
 }
