@@ -29,14 +29,21 @@ ${COMMON_GLSL}
 uniform sampler2D tDepth;
 uniform vec2 uTanHalf;
 uniform vec2 uTexel;
+uniform vec2 uDepthSize;
+uniform vec2 uDepthTexel;
 uniform float uNear;
 uniform float uFar;
 uniform float uRadius;
 uniform float uIntensity;
 uniform float uAspect;
 
+vec2 snapDepthUv(vec2 uv) {
+  vec2 c = clamp(uv, uDepthTexel * 0.5, vec2(1.0) - uDepthTexel * 0.5);
+  return (floor(c * uDepthSize) + 0.5) * uDepthTexel;
+}
+
 float linZ(vec2 uv) {
-  float d = texture2D(tDepth, clamp(uv, vec2(0.001), vec2(0.999))).r;
+  float d = texture2D(tDepth, clamp(uv, uDepthTexel * 0.5, vec2(1.0) - uDepthTexel * 0.5)).r;
   return (uNear * uFar) / max(uFar - d * (uFar - uNear), 1e-4);
 }
 
@@ -45,18 +52,23 @@ vec3 vpos(vec2 uv, float z) {
 }
 
 void main() {
-  float z0 = linZ(vUv);
+  // Snap to exact full-res depth texel centers so NearestFilter never straddles
+  // texel boundaries and causes periodic normal-reconstruction stripes.
+  vec2 uv0 = snapDepthUv(vUv);
+  float z0 = linZ(uv0);
   if (z0 < 0.12 || z0 > 55.0) {
     gl_FragColor = vec4(1.0);
     return;
   }
-  vec3 P = vpos(vUv, z0);
-  vec2 ox = vec2(uTexel.x, 0.0);
-  vec2 oy = vec2(0.0, uTexel.y);
-  float zl = linZ(vUv - ox), zr = linZ(vUv + ox);
-  float zd = linZ(vUv - oy), zu = linZ(vUv + oy);
-  vec3 dx = abs(zl - z0) < abs(zr - z0) ? P - vpos(vUv - ox, zl) : vpos(vUv + ox, zr) - P;
-  vec3 dy = abs(zd - z0) < abs(zu - z0) ? P - vpos(vUv - oy, zd) : vpos(vUv + oy, zu) - P;
+  vec3 P = vpos(uv0, z0);
+  vec2 ox = vec2(uDepthTexel.x, 0.0);
+  vec2 oy = vec2(0.0, uDepthTexel.y);
+  vec2 uvl = snapDepthUv(uv0 - ox), uvr = snapDepthUv(uv0 + ox);
+  vec2 uvd = snapDepthUv(uv0 - oy), uvu = snapDepthUv(uv0 + oy);
+  float zl = linZ(uvl), zr = linZ(uvr);
+  float zd = linZ(uvd), zu = linZ(uvu);
+  vec3 dx = abs(zl - z0) < abs(zr - z0) ? P - vpos(uvl, zl) : vpos(uvr, zr) - P;
+  vec3 dy = abs(zd - z0) < abs(zu - z0) ? P - vpos(uvd, zd) : vpos(uvu, zu) - P;
   vec3 n = normalize(cross(dx, dy));
 
   float R = uRadius * (0.65 + 0.35 * clamp(z0 / 10.0, 0.0, 1.0));
@@ -69,7 +81,7 @@ void main() {
     float a = (float(i) + 0.5) / float(AO_TAPS);
     float th = a * 6.2831853 * 3.0 + rot;
     vec2 o = vec2(cos(th) / uAspect, sin(th)) * a * rUv;
-    vec2 uv2 = vUv + o;
+    vec2 uv2 = snapDepthUv(uv0 + o);
     float z2 = linZ(uv2);
     vec3 v = vpos(uv2, z2) - P;
     float vv = dot(v, v);
@@ -513,6 +525,8 @@ export class CinemaPostPipeline {
         tDepth: { value: this.sceneRT.depthTexture },
         uTanHalf: { value: new THREE.Vector2(1, 1) },
         uTexel: { value: new THREE.Vector2(1, 1) },
+        uDepthSize: { value: new THREE.Vector2(4, 4) },
+        uDepthTexel: { value: new THREE.Vector2(0.25, 0.25) },
         uNear: { value: 0.08 },
         uFar: { value: 95 },
         uRadius: { value: 0.72 },
@@ -650,6 +664,8 @@ export class CinemaPostPipeline {
       const tanY = Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5));
       this.matSSAO.uniforms.uTanHalf.value.set(tanY * camera.aspect, tanY);
       this.matSSAO.uniforms.uTexel.value.set(1 / this.aoA.width, 1 / this.aoA.height);
+      this.matSSAO.uniforms.uDepthSize.value.set(this.sceneRT.width, this.sceneRT.height);
+      this.matSSAO.uniforms.uDepthTexel.value.set(1 / this.sceneRT.width, 1 / this.sceneRT.height);
       this.matSSAO.uniforms.uNear.value = camera.near;
       this.matSSAO.uniforms.uFar.value = camera.far;
       this.matSSAO.uniforms.uAspect.value = camera.aspect;

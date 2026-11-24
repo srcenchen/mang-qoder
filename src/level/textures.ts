@@ -138,7 +138,7 @@ export function createProceduralTextures(): ProceduralTextureSet {
       col.fill();
 
       const rv = Math.floor(130 + rand() * 85);
-      rCtx.fillStyle = `rgba(${rv},${rv},${rv},0.20)`;
+      rCtx.fillStyle = `rgba(${rv},${rv},${rv},0.08)`;
       rCtx.fillRect(x, y, r, r * 0.6);
     }
 
@@ -154,13 +154,13 @@ export function createProceduralTextures(): ProceduralTextureSet {
         ctx.stroke();
       }
     };
-    drawSeams(col, '#14171c', 5);
-    drawSeams(hCtx, '#1c1c1c', 6);
-    drawSeams(rCtx, '#f2f2f2', 6);
+    drawSeams(col, '#1c2026', 4);
+    drawSeams(hCtx, '#b2b2b2', 4);
+    drawSeams(rCtx, '#d8d8d8', 4);
 
     return {
       map: toTexture(cCol, true, 3, 6),
-      normalMap: heightToNormalTexture(cH, 2.2, 3, 6),
+      normalMap: heightToNormalTexture(cH, 0.9, 3, 6),
       roughnessMap: toTexture(cR, false, 3, 6),
     };
   };
@@ -315,7 +315,7 @@ export function createProceduralTextures(): ProceduralTextureSet {
     };
   };
 
-  // 5. Wet Sidewalk Stone Pavers (High Detail + True NormalMap!)
+  // 5. Wet Sidewalk Stone Pavers (Smooth Polished Pavers with Gentle Joints)
   const createWetSidewalk = (): PBRMapGroup => {
     const size = 512;
     const [cCol, col] = makeCanvas(size, size);
@@ -324,44 +324,42 @@ export function createProceduralTextures(): ProceduralTextureSet {
 
     col.fillStyle = '#252930';
     col.fillRect(0, 0, size, size);
-    hCtx.fillStyle = '#303030';
+    hCtx.fillStyle = '#b4b4b4';
     hCtx.fillRect(0, 0, size, size);
-    rCtx.fillStyle = '#6c6c6c';
+    rCtx.fillStyle = '#5c5c5c';
     rCtx.fillRect(0, 0, size, size);
 
     const step = size / 4;
     for (let gy = 0; gy < 4; gy++) {
       for (let gx = 0; gx < 4; gx++) {
-        const tone = 50 + Math.floor(rand() * 24);
+        const tone = 54 + Math.floor(rand() * 14);
         col.fillStyle = `rgb(${tone},${tone + 4},${tone + 9})`;
-        col.fillRect(gx * step + 3, gy * step + 3, step - 6, step - 6);
+        col.fillRect(gx * step + 2, gy * step + 2, step - 4, step - 4);
 
-        const hv = 185 + Math.floor(rand() * 35);
+        const hv = 204 + Math.floor(rand() * 6);
         hCtx.fillStyle = `rgb(${hv},${hv},${hv})`;
-        hCtx.fillRect(gx * step + 4, gy * step + 4, step - 8, step - 8);
+        hCtx.fillRect(gx * step + 2, gy * step + 2, step - 4, step - 4);
       }
     }
 
-    // Mineral stone aggregate
+    // Subtle mineral color grain (preserve PRNG stream; keep height smooth without pitting)
     for (let i = 0; i < 5000; i++) {
       const x = rand() * size;
       const y = rand() * size;
-      const v = 30 + Math.floor(rand() * 52);
-      col.fillStyle = `rgba(${v},${v + 3},${v + 7},0.22)`;
+      const v = 38 + Math.floor(rand() * 32);
+      col.fillStyle = `rgba(${v},${v + 3},${v + 7},0.11)`;
       col.fillRect(x, y, 2, 2);
-      const hv = 130 + Math.floor(rand() * 100);
-      hCtx.fillStyle = `rgba(${hv},${hv},${hv},0.22)`;
-      hCtx.fillRect(x, y, 2, 2);
+      rand();
     }
 
-    // Damp patches
+    // Soft damp patches
     for (let p = 0; p < 14; p++) {
       const px = rand() * size;
       const py = rand() * size;
       const pr = 30 + rand() * 80;
       const g = rCtx.createRadialGradient(px, py, 4, px, py, pr);
-      g.addColorStop(0, 'rgba(20,20,20,0.92)');
-      g.addColorStop(1, 'rgba(108,108,108,0)');
+      g.addColorStop(0, 'rgba(32,32,32,0.48)');
+      g.addColorStop(1, 'rgba(92,92,92,0)');
       rCtx.fillStyle = g;
       rCtx.beginPath();
       rCtx.arc(px, py, pr, 0, Math.PI * 2);
@@ -370,12 +368,12 @@ export function createProceduralTextures(): ProceduralTextureSet {
 
     return {
       map: toTexture(cCol, true, 3, 14),
-      normalMap: heightToNormalTexture(cH, 2.4, 3, 14),
+      normalMap: heightToNormalTexture(cH, 0.55, 3, 14),
       roughnessMap: toTexture(cR, false, 3, 14),
     };
   };
 
-  // 6. Wet Asphalt Roadway
+  // 6. Wet Asphalt Roadway (Smooth Fine-Grained Paved Surface)
   const createWetAsphalt = (): PBRMapGroup => {
     const size = 512;
     const [cCol, col] = makeCanvas(size, size);
@@ -386,19 +384,19 @@ export function createProceduralTextures(): ProceduralTextureSet {
     col.fillRect(0, 0, size, size);
     hCtx.fillStyle = '#808080';
     hCtx.fillRect(0, 0, size, size);
-    rCtx.fillStyle = '#5e5e5e';
+    rCtx.fillStyle = '#525252';
     rCtx.fillRect(0, 0, size, size);
 
     for (let i = 0; i < 8500; i++) {
       const x = rand() * size;
       const y = rand() * size;
-      const v = 16 + Math.floor(rand() * 44);
-      col.fillStyle = `rgb(${v},${v + 2},${v + 5})`;
+      const v = 22 + Math.floor(rand() * 20);
+      col.fillStyle = `rgba(${v},${v + 2},${v + 5},0.22)`;
       col.fillRect(x, y, 2, 2);
-      const hv = 75 + Math.floor(rand() * 145);
-      // Keep the fine color grain; only some grains disturb the wet surface normal.
-      if (i % 4 !== 0) continue;
-      hCtx.fillStyle = `rgb(${hv},${hv},${hv})`;
+      const hv = 122 + Math.floor(rand() * 12);
+      // Keep the shared PRNG stream intact; apply only whisper-soft height variation.
+      if (i % 8 !== 0) continue;
+      hCtx.fillStyle = `rgba(${hv},${hv},${hv},0.06)`;
       hCtx.fillRect(x, y, 2, 2);
     }
 
@@ -409,8 +407,8 @@ export function createProceduralTextures(): ProceduralTextureSet {
       // Preserve the random stream shared by the textures generated after this one.
       if (p % 2 !== 0) continue;
       const g = rCtx.createRadialGradient(px, py, 6, px, py, pr);
-      g.addColorStop(0, 'rgba(16,16,16,0.72)');
-      g.addColorStop(1, 'rgba(94,94,94,0)');
+      g.addColorStop(0, 'rgba(28,28,28,0.45)');
+      g.addColorStop(1, 'rgba(82,82,82,0)');
       rCtx.fillStyle = g;
       rCtx.beginPath();
       rCtx.arc(px, py, pr, 0, Math.PI * 2);
@@ -419,7 +417,7 @@ export function createProceduralTextures(): ProceduralTextureSet {
 
     return {
       map: toTexture(cCol, true, 6, 12),
-      normalMap: heightToNormalTexture(cH, 1.9, 6, 12),
+      normalMap: heightToNormalTexture(cH, 0.35, 6, 12),
       roughnessMap: toTexture(cR, false, 6, 12),
     };
   };

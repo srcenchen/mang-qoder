@@ -416,9 +416,9 @@ export function buildGameScene(
     new THREE.MeshStandardMaterial({
       map: tex.interiorTile.map,
       normalMap: tex.interiorTile.normalMap,
-      normalScale: new THREE.Vector2(0.8, 0.8),
+      normalScale: new THREE.Vector2(0.32, 0.32),
       roughnessMap: tex.interiorTile.roughnessMap,
-      roughness: 0.72,
+      roughness: 0.56,
       metalness: 0.1,
     })
   );
@@ -478,24 +478,24 @@ export function buildGameScene(
     new THREE.MeshStandardMaterial({
       map: tex.wetSidewalk.map,
       normalMap: tex.wetSidewalk.normalMap,
-      normalScale: new THREE.Vector2(0.95, 0.95),
+      normalScale: new THREE.Vector2(0.22, 0.22),
       roughnessMap: tex.wetSidewalk.roughnessMap,
-      roughness: 0.46,
+      roughness: 0.36,
       metalness: 0.16,
     }),
-    { isWetGround: true }
+    { isWetGround: true, flattenWetNormal: true }
   );
 
   const matWetAsphalt = echoManager.enhanceMaterial(
     new THREE.MeshStandardMaterial({
       map: tex.wetAsphalt.map,
       normalMap: tex.wetAsphalt.normalMap,
-      normalScale: new THREE.Vector2(0.30, 0.30),
+      normalScale: new THREE.Vector2(0.10, 0.10),
       roughnessMap: tex.wetAsphalt.roughnessMap,
-      roughness: 0.36,
+      roughness: 0.28,
       metalness: 0.2,
     }),
-    { isWetGround: true, sparseWetPatches: true }
+    { isWetGround: true, sparseWetPatches: true, flattenWetNormal: true }
   );
 
   const matTactileLine = echoManager.enhanceMaterial(

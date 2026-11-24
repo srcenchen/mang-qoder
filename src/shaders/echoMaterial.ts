@@ -49,6 +49,7 @@ export interface EnhanceMaterialOptions {
   selfGlowBoost?: number;
   isWetGround?: boolean;
   sparseWetPatches?: boolean;
+  flattenWetNormal?: boolean;
   puddleFeedback?: boolean;
 }
 
@@ -279,11 +280,12 @@ export class EchoShaderManager {
     const selfBoost = options?.selfGlowBoost ?? 0.0;
     const isWetGround = options?.isWetGround ?? false;
     const sparseWetPatches = options?.sparseWetPatches ?? false;
+    const flattenWetNormal = options?.flattenWetNormal ?? false;
     const patchScale = sparseWetPatches ? Math.SQRT1_2 : 1;
     const mainRippleCell = sparseWetPatches ? '0.95' : '0.85';
     const fineRippleCell = sparseWetPatches ? '0.85' : '0.52';
     const fineRippleThreshold = sparseWetPatches ? '0.60' : '0.45';
-    const rippleDistortion = sparseWetPatches ? '0.013' : '0.022';
+    const rippleDistortion = sparseWetPatches ? '0.009' : '0.014';
 
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.uTime = shared.uTime;
@@ -392,6 +394,13 @@ export class EchoShaderManager {
           }
         `
         : '';
+
+      const wetNormalFlattenInject =
+        isWetGround && flattenWetNormal
+          ? `
+          normal = normalize(mix(normal, nonPerturbedNormal, 0.25 + wetMaskPuddle * 0.65));
+        `
+          : '';
 
       const wetPlanarReflectInject = isWetGround
         ? `
@@ -512,6 +521,11 @@ export class EchoShaderManager {
           ${wetRoughnessInject}`
         )
         .replace(
+          '#include <normal_fragment_maps>',
+          `#include <normal_fragment_maps>
+          ${wetNormalFlattenInject}`
+        )
+        .replace(
           '#include <opaque_fragment>',
           `
           ${wetPlanarReflectInject}
@@ -616,7 +630,7 @@ export class EchoShaderManager {
     };
 
     mat.customProgramCacheKey = () =>
-      `echo-aaa-v3-${selfBoost.toFixed(2)}-${isWetGround ? 'wet' : 'std'}-${patchScale}-${options?.puddleFeedback ? 'puddle' : 'standard'}`;
+      `echo-aaa-v3-${selfBoost.toFixed(2)}-${isWetGround ? 'wet' : 'std'}-${patchScale}-${flattenWetNormal ? 'flat' : 'raw'}-${options?.puddleFeedback ? 'puddle' : 'standard'}`;
     return mat;
   }
 }
